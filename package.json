@@ -1,0 +1,16 @@
+{
+  "name": "isolation-levels-demo",
+  "private": true,
+  "packageManager": "pnpm@10.26.2",
+  "scripts": {
+    "dev": "pnpm --parallel dev",
+    "dev:backend": "pnpm --filter backend dev",
+    "dev:frontend": "pnpm --filter frontend dev",
+    "lint": "pnpm --parallel lint",
+    "build": "pnpm --parallel build"
+  },
+  "devDependencies": {
+    "prettier": "^3.7.4",
+    "typescript": "^5.9.3"
+  }
+}
