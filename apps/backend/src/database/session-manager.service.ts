@@ -1,4 +1,4 @@
-import { Injectable, OnModuleDestroy } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { Client, DatabaseError } from 'pg';
 import type {
   IsolationLevel,
@@ -8,13 +8,23 @@ import type {
   FieldInfo,
 } from '@isolation-demo/shared';
 
-/**
- * Active PostgreSQL session
- */
 interface ActiveSession {
   client: Client;
   state: SessionState;
 }
+
+const PG_TYPE_MAP: Record<number, string> = {
+  16: 'boolean',
+  23: 'integer',
+  25: 'text',
+  700: 'float4',
+  701: 'float8',
+  1043: 'varchar',
+  1082: 'date',
+  1114: 'timestamp',
+  1184: 'timestamptz',
+  1700: 'numeric',
+};
 
 /**
  * Manages PostgreSQL sessions for isolation level demonstration.
@@ -22,19 +32,17 @@ interface ActiveSession {
  */
 @Injectable()
 export class SessionManagerService implements OnModuleDestroy {
-  private sessions = new Map<string, ActiveSession>();
+  private readonly logger = new Logger(SessionManagerService.name);
+  private readonly sessions = new Map<string, ActiveSession>();
 
   private readonly connectionConfig = {
     host: process.env.DB_HOST || 'localhost',
-    port: parseInt(process.env.DB_PORT || '5432'),
+    port: parseInt(process.env.DB_PORT || '5432', 10),
     database: process.env.DB_NAME || 'isolation_demo',
     user: process.env.DB_USER || 'demo',
     password: process.env.DB_PASSWORD || 'demo',
   };
 
-  /**
-   * Creates a new session with a dedicated database connection
-   */
   async createSession(
     isolationLevel: IsolationLevel = 'READ COMMITTED',
   ): Promise<SessionState> {
@@ -42,6 +50,7 @@ export class SessionManagerService implements OnModuleDestroy {
     const client = new Client(this.connectionConfig);
 
     await client.connect();
+    this.logger.log(`Session created: ${sessionId}`);
 
     const state: SessionState = {
       sessionId,
@@ -51,13 +60,9 @@ export class SessionManagerService implements OnModuleDestroy {
     };
 
     this.sessions.set(sessionId, { client, state });
-
     return state;
   }
 
-  /**
-   * Executes an SQL query within the session context
-   */
   async executeQuery(
     sessionId: string,
     sql: string,
@@ -68,46 +73,45 @@ export class SessionManagerService implements OnModuleDestroy {
     }
 
     const { client, state } = session;
-    const startTime = Date.now();
+    const startTime = performance.now();
 
     try {
-      // Auto-start transaction on first query
       if (!state.inTransaction) {
         await client.query(`BEGIN ISOLATION LEVEL ${state.isolationLevel}`);
         state.inTransaction = true;
       }
 
       const pgResult = await client.query(sql);
-      const duration = Date.now() - startTime;
+      const duration = Math.round(performance.now() - startTime);
 
-      const fields: FieldInfo[] =
-        pgResult.fields?.map((f) => ({
-          name: f.name,
-          dataType: this.mapDataType(f.dataTypeID),
-        })) || [];
+      const fields: FieldInfo[] = (pgResult.fields ?? []).map((f) => ({
+        name: f.name,
+        dataType: PG_TYPE_MAP[f.dataTypeID] ?? 'unknown',
+      }));
 
-      const result: QueryResult = {
-        rows: pgResult.rows as Record<string, unknown>[],
-        rowCount: pgResult.rowCount ?? 0,
-        fields,
-        duration,
+      return {
+        result: {
+          rows: pgResult.rows as Record<string, unknown>[],
+          rowCount: pgResult.rowCount ?? 0,
+          fields,
+          duration,
+        },
       };
-
-      return { result };
     } catch (err) {
       return { error: this.parseError(err) };
     }
   }
 
-  /**
-   * Commits the current transaction
-   */
   async commit(
     sessionId: string,
   ): Promise<{ success: boolean; error?: QueryError }> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return { success: false, error: { message: 'Session not found' } };
+    }
+
+    if (!session.state.inTransaction) {
+      return { success: false, error: { message: 'No active transaction' } };
     }
 
     try {
@@ -119,15 +123,16 @@ export class SessionManagerService implements OnModuleDestroy {
     }
   }
 
-  /**
-   * Rolls back the current transaction
-   */
   async rollback(
     sessionId: string,
   ): Promise<{ success: boolean; error?: QueryError }> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return { success: false, error: { message: 'Session not found' } };
+    }
+
+    if (!session.state.inTransaction) {
+      return { success: false, error: { message: 'No active transaction' } };
     }
 
     try {
@@ -139,9 +144,6 @@ export class SessionManagerService implements OnModuleDestroy {
     }
   }
 
-  /**
-   * Changes the isolation level (only allowed outside of a transaction)
-   */
   setIsolationLevel(
     sessionId: string,
     level: IsolationLevel,
@@ -164,50 +166,62 @@ export class SessionManagerService implements OnModuleDestroy {
     return { success: true };
   }
 
-  /**
-   * Returns the current session state
-   */
   getSessionState(sessionId: string): SessionState | null {
     return this.sessions.get(sessionId)?.state ?? null;
   }
 
-  /**
-   * Fetches committed table data using a separate connection
-   */
   async getCommittedData(table: string): Promise<Record<string, unknown>[]> {
     const client = new Client(this.connectionConfig);
     try {
       await client.connect();
       const result = await client.query(`SELECT * FROM ${table} ORDER BY id`);
       return result.rows as Record<string, unknown>[];
+    } catch {
+      return [];
     } finally {
-      await client.end();
+      await client.end().catch(() => {});
     }
   }
 
-  /**
-   * Closes a session and releases its database connection
-   */
+  async executeSetup(
+    sql: string,
+  ): Promise<{ success: boolean; error?: QueryError }> {
+    const client = new Client(this.connectionConfig);
+    try {
+      await client.connect();
+      await client.query(sql);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: this.parseError(err) };
+    } finally {
+      await client.end().catch(() => {});
+    }
+  }
+
   async closeSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
-    if (session) {
+    if (!session) return;
+
+    try {
+      if (session.state.inTransaction) {
+        await session.client.query('ROLLBACK');
+      }
       await session.client.end();
+    } catch {
+      // Ignore close errors
+    } finally {
       this.sessions.delete(sessionId);
+      this.logger.log(`Session closed: ${sessionId}`);
     }
   }
 
-  /**
-   * Closes all sessions on module destroy
-   */
   async onModuleDestroy(): Promise<void> {
-    for (const [sessionId] of this.sessions) {
-      await this.closeSession(sessionId);
-    }
+    const closePromises = Array.from(this.sessions.keys()).map((id) =>
+      this.closeSession(id),
+    );
+    await Promise.allSettled(closePromises);
   }
 
-  /**
-   * Converts an error to QueryError format
-   */
   private parseError(err: unknown): QueryError {
     if (err instanceof DatabaseError) {
       return {
@@ -222,25 +236,7 @@ export class SessionManagerService implements OnModuleDestroy {
     return { message: 'Unknown error' };
   }
 
-  /**
-   * Generates a unique session identifier
-   */
   private generateSessionId(): string {
-    return `session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  }
-
-  /**
-   * Maps PostgreSQL OID to human-readable type name
-   */
-  private mapDataType(oid: number): string {
-    const types: Record<number, string> = {
-      23: 'integer',
-      25: 'text',
-      1043: 'varchar',
-      1700: 'numeric',
-      16: 'boolean',
-      1114: 'timestamp',
-    };
-    return types[oid] || 'unknown';
+    return `sess_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   }
 }

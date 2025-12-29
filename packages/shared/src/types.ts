@@ -91,6 +91,15 @@ export interface CommittedDataEvent {
   rows: Record<string, unknown>[];
 }
 
+export type SessionOperationResult =
+  | { sessionId: string; state: SessionState; error?: undefined }
+  | { sessionId: string; state?: undefined; error: string };
+
+export interface SetupResponse {
+  success: boolean;
+  error?: string;
+}
+
 // ─────────────────────────────────────────────
 // WebSocket Event Names
 // ─────────────────────────────────────────────
@@ -103,6 +112,8 @@ export const WS_EVENTS = {
   SESSION_ROLLBACK: 'session:rollback',
   SESSION_SET_ISOLATION: 'session:setIsolation',
   SESSION_DISCONNECT: 'session:disconnect',
+  SETUP_EXECUTE: 'setup:execute',
+  DATA_GET_COMMITTED: 'data:getCommitted',
 
   // Server → Client
   SESSION_CREATED: 'session:created',

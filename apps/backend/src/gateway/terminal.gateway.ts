@@ -7,58 +7,64 @@ import {
   MessageBody,
   ConnectedSocket,
 } from '@nestjs/websockets';
+import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { SessionManagerService } from '../database/session-manager.service';
-import type {
-  CreateSessionPayload,
-  ExecuteQueryPayload,
-  SessionActionPayload,
-  SetIsolationPayload,
-  SessionCreatedEvent,
-  QueryResultEvent,
-  SessionStatusEvent,
-  CommittedDataEvent,
+import {
+  WS_EVENTS,
+  type CreateSessionPayload,
+  type ExecuteQueryPayload,
+  type SessionActionPayload,
+  type SetIsolationPayload,
+  type SessionCreatedEvent,
+  type QueryResultEvent,
+  type SessionStatusEvent,
+  type SessionOperationResult,
+  type SetupResponse,
+  type CommittedDataEvent,
 } from '@isolation-demo/shared';
+
+const DEMO_TABLES = ['accounts', 'products'] as const;
 
 /**
  * WebSocket gateway for SQL terminal sessions.
  * Handles real-time communication between frontend terminals and database sessions.
  */
 @WebSocketGateway({
-  cors: {
-    origin: '*',
-  },
+  cors: { origin: '*' },
 })
 export class TerminalGateway
   implements OnGatewayConnection, OnGatewayDisconnect
 {
+  private readonly logger = new Logger(TerminalGateway.name);
+
   @WebSocketServer()
-  server!: Server;
+  private readonly server!: Server;
 
-  /** Maps socket.id to sessionId[] for cleanup on disconnect */
-  private socketSessions = new Map<string, string[]>();
+  private readonly socketSessions = new Map<string, Set<string>>();
 
-  constructor(private sessionManager: SessionManagerService) {}
+  constructor(private readonly sessionManager: SessionManagerService) {}
 
   handleConnection(client: Socket): void {
-    console.log(`Client connected: ${client.id}`);
-    this.socketSessions.set(client.id, []);
+    this.logger.log(`Client connected: ${client.id}`);
+    this.socketSessions.set(client.id, new Set());
   }
 
   async handleDisconnect(client: Socket): Promise<void> {
-    console.log(`Client disconnected: ${client.id}`);
+    this.logger.log(`Client disconnected: ${client.id}`);
 
-    const sessions = this.socketSessions.get(client.id) ?? [];
-    for (const sessionId of sessions) {
-      await this.sessionManager.closeSession(sessionId);
+    const sessionIds = this.socketSessions.get(client.id);
+    if (sessionIds) {
+      await Promise.allSettled(
+        Array.from(sessionIds).map((id) =>
+          this.sessionManager.closeSession(id),
+        ),
+      );
     }
     this.socketSessions.delete(client.id);
   }
 
-  /**
-   * Creates a new database session for the client
-   */
-  @SubscribeMessage('session:create')
+  @SubscribeMessage(WS_EVENTS.SESSION_CREATE)
   async handleCreateSession(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: CreateSessionPayload,
@@ -66,19 +72,11 @@ export class TerminalGateway
     const state = await this.sessionManager.createSession(
       payload?.isolationLevel,
     );
-
-    // Track socket-to-session mapping for cleanup
-    const sessions = this.socketSessions.get(client.id) ?? [];
-    sessions.push(state.sessionId);
-    this.socketSessions.set(client.id, sessions);
-
+    this.socketSessions.get(client.id)?.add(state.sessionId);
     return { sessionId: state.sessionId, state };
   }
 
-  /**
-   * Executes an SQL query in the specified session
-   */
-  @SubscribeMessage('session:execute')
+  @SubscribeMessage(WS_EVENTS.SESSION_EXECUTE)
   async handleExecuteQuery(
     @ConnectedSocket() client: Socket,
     @MessageBody() payload: ExecuteQueryPayload,
@@ -89,50 +87,46 @@ export class TerminalGateway
       sql,
     );
 
-    // Send updated session status to client
     const state = this.sessionManager.getSessionState(sessionId);
     if (state) {
       const statusEvent: SessionStatusEvent = { sessionId, state };
-      client.emit('session:status', statusEvent);
+      client.emit(WS_EVENTS.SESSION_STATUS, statusEvent);
     }
 
     return { sessionId, result, error };
   }
 
-  /**
-   * Commits the transaction in the specified session
-   */
-  @SubscribeMessage('session:commit')
+  @SubscribeMessage(WS_EVENTS.SESSION_COMMIT)
   async handleCommit(
-    @ConnectedSocket() _client: Socket,
     @MessageBody() payload: SessionActionPayload,
-  ): Promise<SessionStatusEvent | { sessionId: string; error: string }> {
+  ): Promise<SessionOperationResult> {
     const { sessionId } = payload;
+    const { error } = await this.sessionManager.commit(sessionId);
 
-    await this.sessionManager.commit(sessionId);
-
-    const state = this.sessionManager.getSessionState(sessionId);
-    if (!state) {
-      return { sessionId, error: 'Session not found' };
+    if (error) {
+      return { sessionId, error: error.message };
     }
 
-    // Broadcast updated committed data to all clients
     await this.broadcastCommittedData();
 
+    const state = this.sessionManager.getSessionState(sessionId);
+    if (!state) {
+      return { sessionId, error: 'Session not found' };
+    }
+
     return { sessionId, state };
   }
 
-  /**
-   * Rolls back the transaction in the specified session
-   */
-  @SubscribeMessage('session:rollback')
+  @SubscribeMessage(WS_EVENTS.SESSION_ROLLBACK)
   async handleRollback(
-    @ConnectedSocket() _client: Socket,
     @MessageBody() payload: SessionActionPayload,
-  ): Promise<SessionStatusEvent | { sessionId: string; error: string }> {
+  ): Promise<SessionOperationResult> {
     const { sessionId } = payload;
+    const { error } = await this.sessionManager.rollback(sessionId);
 
-    await this.sessionManager.rollback(sessionId);
+    if (error) {
+      return { sessionId, error: error.message };
+    }
 
     const state = this.sessionManager.getSessionState(sessionId);
     if (!state) {
@@ -142,40 +136,31 @@ export class TerminalGateway
     return { sessionId, state };
   }
 
-  /**
-   * Changes the isolation level for the specified session
-   */
-  @SubscribeMessage('session:setIsolation')
+  @SubscribeMessage(WS_EVENTS.SESSION_SET_ISOLATION)
   handleSetIsolation(
-    @ConnectedSocket() _client: Socket,
     @MessageBody() payload: SetIsolationPayload,
-  ): SessionStatusEvent & { error?: string } {
+  ): SessionOperationResult {
     const { sessionId, level } = payload;
-    const { success, error } = this.sessionManager.setIsolationLevel(
-      sessionId,
-      level,
-    );
+
+    const currentState = this.sessionManager.getSessionState(sessionId);
+    if (!currentState) {
+      return { sessionId, error: 'Session not found' };
+    }
+
+    const { error } = this.sessionManager.setIsolationLevel(sessionId, level);
+    if (error) {
+      return { sessionId, error: error.message };
+    }
 
     const state = this.sessionManager.getSessionState(sessionId);
     if (!state) {
-      return {
-        sessionId,
-        state: null as unknown as SessionStatusEvent['state'],
-        error: 'Session not found',
-      };
-    }
-
-    if (!success) {
-      return { sessionId, state, error: error?.message };
+      return { sessionId, error: 'Session not found' };
     }
 
     return { sessionId, state };
   }
 
-  /**
-   * Returns the committed data for a specific table
-   */
-  @SubscribeMessage('data:getCommitted')
+  @SubscribeMessage(WS_EVENTS.DATA_GET_COMMITTED)
   async handleGetCommitted(
     @MessageBody() payload: { table: string },
   ): Promise<CommittedDataEvent> {
@@ -183,15 +168,28 @@ export class TerminalGateway
     return { table: payload.table, rows };
   }
 
-  /**
-   * Broadcasts committed data changes to all connected clients
-   */
-  private async broadcastCommittedData(): Promise<void> {
-    const tables = ['accounts', 'products'];
-    for (const table of tables) {
-      const rows = await this.sessionManager.getCommittedData(table);
-      const event: CommittedDataEvent = { table, rows };
-      this.server.emit('data:committed', event);
+  @SubscribeMessage(WS_EVENTS.SETUP_EXECUTE)
+  async handleSetupExecute(
+    @MessageBody() payload: { sql: string },
+  ): Promise<SetupResponse> {
+    const { success, error } = await this.sessionManager.executeSetup(
+      payload.sql,
+    );
+
+    if (success) {
+      await this.broadcastCommittedData();
     }
+
+    return { success, error: error?.message };
+  }
+
+  private async broadcastCommittedData(): Promise<void> {
+    await Promise.all(
+      DEMO_TABLES.map(async (table) => {
+        const rows = await this.sessionManager.getCommittedData(table);
+        const event: CommittedDataEvent = { table, rows };
+        this.server.emit(WS_EVENTS.DATA_COMMITTED, event);
+      }),
+    );
   }
 }
