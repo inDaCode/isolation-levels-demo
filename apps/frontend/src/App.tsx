@@ -1,34 +1,46 @@
 import { useSocket } from '@/hooks/use-socket';
-import { Badge } from '@/components/ui/badge';
+import { useDatabaseSetup } from '@/hooks/use-database-setup';
+import { Header } from '@/components/layout/header';
 import { TerminalPanel } from '@/components/terminal/terminal-panel';
+import { DatabaseState } from '@/components/database-state/database-state';
 
 function App() {
   const { status } = useSocket();
-
-  const statusColor = {
-    connected: 'bg-green-500',
-    connecting: 'bg-yellow-500',
-    disconnected: 'bg-red-500',
-  }[status];
+  const {
+    isReady,
+    isLoading: isResetting,
+    error: setupError,
+    reset,
+  } = useDatabaseSetup(status === 'connected');
 
   return (
-    <div className="min-h-screen bg-background text-foreground p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="text-2xl font-bold">PostgreSQL Isolation Levels Demo</h1>
-        <Badge variant="outline" className="gap-2">
-          <span className={`w-2 h-2 rounded-full ${statusColor}`} />
-          {status}
-        </Badge>
-      </div>
+    <div className="h-screen flex flex-col bg-background text-foreground">
+      <Header
+        connectionStatus={status}
+        onReset={reset}
+        isResetting={isResetting}
+        setupError={setupError}
+      />
 
-      {status === 'connected' ? (
-        <div className="grid grid-cols-2 gap-4 h-[calc(100vh-100px)]">
-          <TerminalPanel title="Terminal 1" defaultIsolationLevel="READ COMMITTED" />
-          <TerminalPanel title="Terminal 2" defaultIsolationLevel="READ COMMITTED" />
-        </div>
-      ) : (
-        <div className="text-zinc-400">Connecting to server...</div>
-      )}
+      <main className="flex-1 p-4 overflow-hidden flex flex-col gap-4">
+        {status !== 'connected' ? (
+          <div className="flex items-center justify-center h-full text-zinc-400">
+            Connecting to server...
+          </div>
+        ) : !isReady ? (
+          <div className="flex items-center justify-center h-full text-zinc-400">
+            {isResetting ? 'Setting up database...' : 'Waiting for database...'}
+          </div>
+        ) : (
+          <>
+            <DatabaseState />
+            <div className="flex-1 grid grid-cols-2 gap-4 min-h-0">
+              <TerminalPanel title="Terminal 1" defaultIsolationLevel="READ COMMITTED" />
+              <TerminalPanel title="Terminal 2" defaultIsolationLevel="READ COMMITTED" />
+            </div>
+          </>
+        )}
+      </main>
     </div>
   );
 }
