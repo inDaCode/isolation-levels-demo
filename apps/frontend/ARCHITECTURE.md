@@ -6,13 +6,14 @@ React SPA для демонстрации уровней изоляции Postgr
 
 ## Core Concepts
 
-### Single Isolation Level
+### Independent Terminal Sessions
 
-Один уровень изоляции на всё приложение. Обе сессии работают с одинаковым уровнем — это отражает реальную практику и упрощает сравнение.
+- Каждый терминал = отдельная PostgreSQL сессия
+- Каждый терминал имеет свой уровень изоляции
+- Позволяет экспериментировать с разными уровнями одновременно
 
 ### Two Terminals, One Truth
 
-- Каждый терминал = отдельная PostgreSQL сессия
 - Database State показывает что видит каждая сессия + committed данные
 - Разница между "что вижу я" и "что в БД" — суть демонстрации
 
@@ -27,7 +28,8 @@ src/
 │   ├── terminal/
 │   │   ├── terminal-panel.tsx      # Monaco editor + controls + status
 │   │   ├── terminal-controls.tsx   # Run, BEGIN, COMMIT, ROLLBACK buttons
-│   │   └── terminal-status.tsx     # Connection state, in-transaction indicator
+│   │   ├── terminal-status.tsx     # Connection state, in-transaction indicator
+│   │   └── isolation-select.tsx    # Per-terminal isolation level dropdown
 │   │
 │   ├── database-state/
 │   │   ├── database-state.tsx      # Main comparison table
@@ -40,7 +42,6 @@ src/
 │   │   └── scenario-explanation.tsx # Contextual hints
 │   │
 │   └── shared/
-│       ├── isolation-select.tsx    # Global isolation level dropdown
 │       └── status-badge.tsx        # ⚪🟡🔴 indicators
 │
 ├── hooks/
@@ -64,11 +65,9 @@ src/
 ```
 AppShell
 ├── useSocket()                    # Connection status
-├── useSession() × 2               # Terminal 1 & 2 state
+├── useSession() × 2               # Terminal 1 & 2 state (each with own isolation level)
 ├── useScenario(t1, t2)            # Orchestrates both terminals
-├── useDatabaseState()             # What each session sees
-│
-└── Context: IsolationLevelContext # Global isolation level
+└── useDatabaseState()             # What each session sees
 ```
 
 ## Data Flow
@@ -102,17 +101,17 @@ Re-render Database State table
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Isolation: [READ COMMITTED ▼]                              │
 │  Mode: [Sandbox | Scenarios]                    [Reset]     │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─ Terminal 1 ─────────────┐  ┌─ Terminal 2 ─────────────┐│
-│  │ Status: 🟡 IN TXN  ⏱ 12ms│  │ Status: ⚪ IDLE          ││
+│  │ [READ COMMITTED ▼]  🟡   │  │ [REPEATABLE READ ▼]  ⚪  ││
 │  │ ┌─────────────────────┐  │  │ ┌─────────────────────┐  ││
 │  │ │ Monaco Editor       │  │  │ │ Monaco Editor       │  ││
 │  │ └─────────────────────┘  │  │ └─────────────────────┘  ││
 │  │ [▶ Run] [BEGIN] [COMMIT] │  │ [▶ Run] [BEGIN] [COMMIT] ││
 │  │         [ROLLBACK]       │  │         [ROLLBACK]       ││
+│  │ ⏱ 12ms                   │  │ ⏱ 8ms                    ││
 │  └──────────────────────────┘  └──────────────────────────┘│
 │                                                             │
 ├─────────────────────────────────────────────────────────────┤
@@ -123,7 +122,7 @@ Re-render Database State table
 │  │                        ↑                               │ │
 │  │               (uncommitted)                            │ │
 │  └────────────────────────────────────────────────────────┘ │
-│  ⏱ Session 1: 24ms | Session 2: 8ms | ❌ Errors: 0        │
+│  ❌ Errors: 0                                               │
 │                                                             │
 ├─────────────────────────────────────────────────────────────┤
 │  💡 Explanation (contextual)                                │
@@ -141,7 +140,10 @@ interface Scenario {
   id: string;
   name: string; // "Lost Update"
   description: string; // Brief explanation
-  recommendedIsolation: IsolationLevel;
+  isolationLevels: {
+    terminal1: IsolationLevel;
+    terminal2: IsolationLevel;
+  };
   showsFixAt?: IsolationLevel; // Which level prevents this
   setupSql: string[]; // Initial data
   steps: ScenarioStep[];
@@ -165,6 +167,17 @@ interface ScenarioStep {
 | Serialization Error | SERIALIZABLE     | (expected behavior)               |
 
 \*PostgreSQL's REPEATABLE READ prevents phantoms unlike SQL standard
+
+## Scenarios Mode Behavior
+
+- Селекторы isolation level **disabled** — сценарий сам выставляет нужные уровни
+- Пошаговое выполнение с объяснениями
+- Кнопки: Back, Run Step, Next
+
+## Sandbox Mode Behavior
+
+- Селекторы isolation level **enabled** — полная свобода
+- Пользователь сам пишет SQL и управляет транзакциями
 
 ## Metrics Tracked
 
