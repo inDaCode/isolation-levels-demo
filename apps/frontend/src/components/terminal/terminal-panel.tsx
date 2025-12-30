@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useSession } from '@/hooks/use-session';
+import { QueryResultView } from './query-result';
 import type { IsolationLevel } from '@isolation-demo/shared';
 
 const ISOLATION_LEVELS: IsolationLevel[] = [
@@ -48,9 +49,9 @@ export function TerminalPanel({
   const statusColor = session.state?.inTransaction ? 'bg-yellow-500' : 'bg-green-500';
 
   return (
-    <Card className="flex flex-col h-full p-4 gap-3">
+    <Card className="flex flex-col h-full p-4 gap-3 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
           <span className="font-semibold">{title}</span>
           <Badge variant="outline" className="gap-1.5">
@@ -73,7 +74,7 @@ export function TerminalPanel({
       </div>
 
       {/* Editor */}
-      <div className="flex-1 min-h-[200px] border border-zinc-800 rounded overflow-hidden">
+      <div className="h-[200px] shrink-0 border border-zinc-800 rounded overflow-hidden">
         <Editor
           height="100%"
           defaultLanguage="sql"
@@ -92,7 +93,7 @@ export function TerminalPanel({
       </div>
 
       {/* Controls */}
-      <div className="flex gap-2">
+      <div className="flex gap-2 shrink-0">
         <Button onClick={handleExecute} disabled={session.isLoading || !session.state}>
           Run
         </Button>
@@ -118,38 +119,9 @@ export function TerminalPanel({
       </div>
 
       {/* Results */}
-      {session.lastError && (
-        <div className="p-3 bg-red-950 border border-red-900 rounded text-red-400 text-sm">
-          {session.lastError.message}
-        </div>
-      )}
-
-      {session.lastResult && session.lastResult.rows.length > 0 && (
-        <div className="overflow-auto max-h-[200px] border border-zinc-800 rounded">
-          <table className="w-full text-sm">
-            <thead className="bg-zinc-800 sticky top-0">
-              <tr>
-                {session.lastResult.fields.map((field) => (
-                  <th key={field.name} className="px-3 py-2 text-left font-medium">
-                    {field.name}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {session.lastResult.rows.map((row, i) => (
-                <tr key={i} className="border-t border-zinc-800">
-                  {session.lastResult!.fields.map((field) => (
-                    <td key={field.name} className="px-3 py-2">
-                      {String(row[field.name] ?? 'NULL')}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <QueryResultView result={session.lastResult} error={session.lastError} />
+      </div>
     </Card>
   );
 }
