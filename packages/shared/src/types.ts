@@ -79,6 +79,7 @@ export interface QueryResultEvent {
   sessionId: string;
   result?: QueryResult;
   error?: QueryError;
+  state?: SessionState;
 }
 
 export interface SessionStatusEvent {

@@ -76,11 +76,70 @@ export class SessionManagerService implements OnModuleDestroy {
     const startTime = performance.now();
 
     try {
-      if (!state.inTransaction) {
+      const sqlUpper = sql.trim().toUpperCase();
+
+      // Handle BEGIN - start transaction with configured isolation level
+      if (
+        sqlUpper === 'BEGIN' ||
+        sqlUpper === 'BEGIN;' ||
+        sqlUpper.startsWith('BEGIN ')
+      ) {
+        if (state.inTransaction) {
+          return { error: { message: 'Transaction already in progress' } };
+        }
+
         await client.query(`BEGIN ISOLATION LEVEL ${state.isolationLevel}`);
         state.inTransaction = true;
+
+        return {
+          result: {
+            rows: [],
+            rowCount: 0,
+            fields: [],
+            duration: Math.round(performance.now() - startTime),
+          },
+        };
       }
 
+      // Handle COMMIT
+      if (sqlUpper === 'COMMIT' || sqlUpper === 'COMMIT;') {
+        if (!state.inTransaction) {
+          return { error: { message: 'No transaction in progress' } };
+        }
+
+        await client.query('COMMIT');
+        state.inTransaction = false;
+
+        return {
+          result: {
+            rows: [],
+            rowCount: 0,
+            fields: [],
+            duration: Math.round(performance.now() - startTime),
+          },
+        };
+      }
+
+      // Handle ROLLBACK
+      if (sqlUpper === 'ROLLBACK' || sqlUpper === 'ROLLBACK;') {
+        if (!state.inTransaction) {
+          return { error: { message: 'No transaction in progress' } };
+        }
+
+        await client.query('ROLLBACK');
+        state.inTransaction = false;
+
+        return {
+          result: {
+            rows: [],
+            rowCount: 0,
+            fields: [],
+            duration: Math.round(performance.now() - startTime),
+          },
+        };
+      }
+
+      // Regular query - runs in autocommit mode if not in explicit transaction
       const pgResult = await client.query(sql);
       const duration = Math.round(performance.now() - startTime);
 
@@ -98,6 +157,16 @@ export class SessionManagerService implements OnModuleDestroy {
         },
       };
     } catch (err) {
+      // If error occurs during transaction, transaction may be aborted
+      // PostgreSQL requires ROLLBACK before new commands
+      if (state.inTransaction) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          // Ignore rollback errors
+        }
+        state.inTransaction = false;
+      }
       return { error: this.parseError(err) };
     }
   }

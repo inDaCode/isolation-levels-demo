@@ -18,7 +18,6 @@ import {
   type SetIsolationPayload,
   type SessionCreatedEvent,
   type QueryResultEvent,
-  type SessionStatusEvent,
   type SessionOperationResult,
   type SetupResponse,
   type CommittedDataEvent,
@@ -87,13 +86,9 @@ export class TerminalGateway
       sql,
     );
 
-    const state = this.sessionManager.getSessionState(sessionId);
-    if (state) {
-      const statusEvent: SessionStatusEvent = { sessionId, state };
-      client.emit(WS_EVENTS.SESSION_STATUS, statusEvent);
-    }
+    const state = this.sessionManager.getSessionState(sessionId) ?? undefined;
 
-    return { sessionId, result, error };
+    return { sessionId, result, error, state };
   }
 
   @SubscribeMessage(WS_EVENTS.SESSION_COMMIT)

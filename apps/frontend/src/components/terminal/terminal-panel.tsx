@@ -6,14 +6,9 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { useSession } from '@/hooks/use-session';
 import { QueryResultView } from './query-result';
+import { SqlPresets } from './sql-presets';
+import { IsolationSelect } from './isolation-select';
 import type { IsolationLevel } from '@isolation-demo/shared';
-
-const ISOLATION_LEVELS: IsolationLevel[] = [
-  'READ UNCOMMITTED',
-  'READ COMMITTED',
-  'REPEATABLE READ',
-  'SERIALIZABLE',
-];
 
 interface TerminalPanelProps {
   title: string;
@@ -29,6 +24,16 @@ export function TerminalPanel({
   const [sql, setSql] = useState('SELECT * FROM accounts;');
   const session = useSession();
 
+  const executeRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    executeRef.current = () => {
+      if (sql.trim()) {
+        session.execute(sql.trim());
+      }
+    };
+  }, [sql, session]);
+
   useEffect(() => {
     if (!initializedRef.current) {
       initializedRef.current = true;
@@ -36,17 +41,32 @@ export function TerminalPanel({
     }
   }, [session, defaultIsolationLevel]);
 
-  const handleEditorMount: OnMount = (editor) => {
+  const handleEditorMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
+
+    editor.addAction({
+      id: 'run-query',
+      label: 'Run Query',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+      run: () => executeRef.current(),
+    });
   };
 
   const handleExecute = () => {
-    if (sql.trim()) {
-      session.execute(sql.trim());
-    }
+    executeRef.current();
+  };
+
+  const handleBegin = () => {
+    session.execute('BEGIN');
+  };
+
+  const handlePresetSelect = (presetSql: string) => {
+    setSql(presetSql);
+    editorRef.current?.focus();
   };
 
   const statusColor = session.state?.inTransaction ? 'bg-yellow-500' : 'bg-green-500';
+  const statusText = session.state?.inTransaction ? 'In Transaction' : 'Idle';
 
   return (
     <Card className="flex flex-col h-full p-4 gap-3 overflow-hidden">
@@ -56,21 +76,20 @@ export function TerminalPanel({
           <span className="font-semibold">{title}</span>
           <Badge variant="outline" className="gap-1.5">
             <span className={`w-2 h-2 rounded-full ${statusColor}`} />
-            {session.state?.inTransaction ? 'In Transaction' : 'Idle'}
+            {statusText}
           </Badge>
         </div>
-        <select
+        <IsolationSelect
           value={session.state?.isolationLevel ?? defaultIsolationLevel}
-          onChange={(e) => session.setIsolationLevel(e.target.value as IsolationLevel)}
+          onChange={(level) => session.setIsolationLevel(level)}
           disabled={session.state?.inTransaction}
-          className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm"
-        >
-          {ISOLATION_LEVELS.map((level) => (
-            <option key={level} value={level}>
-              {level}
-            </option>
-          ))}
-        </select>
+        />
+      </div>
+
+      {/* SQL Presets Toolbar */}
+      <div className="flex items-center justify-between shrink-0">
+        <SqlPresets onSelect={handlePresetSelect} disabled={!session.state} />
+        <span className="text-xs text-zinc-500">Ctrl+Enter to run</span>
       </div>
 
       {/* Editor */}
@@ -94,7 +113,18 @@ export function TerminalPanel({
 
       {/* Controls */}
       <div className="flex gap-2 shrink-0">
-        <Button onClick={handleExecute} disabled={session.isLoading || !session.state}>
+        <Button
+          variant={session.state?.inTransaction ? 'outline' : 'default'}
+          onClick={handleBegin}
+          disabled={session.isLoading || !session.state || session.state.inTransaction}
+        >
+          BEGIN
+        </Button>
+        <Button
+          variant="secondary"
+          onClick={handleExecute}
+          disabled={session.isLoading || !session.state}
+        >
           Run
         </Button>
         <Button

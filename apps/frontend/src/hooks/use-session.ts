@@ -58,6 +58,10 @@ export function useSession(): UseSessionReturn {
         } else if (response.result) {
           setLastResult(response.result);
         }
+        // Update session state (inTransaction, isolationLevel)
+        if (response.state) {
+          setState(response.state);
+        }
       } finally {
         setIsLoading(false);
       }
