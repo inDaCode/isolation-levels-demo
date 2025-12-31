@@ -1,9 +1,9 @@
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { useCommittedData } from '@/hooks/use-committed-data';
+import { useCommittedData, type TableChanges } from '@/hooks/use-committed-data';
 
 export function DatabaseState() {
-  const { data } = useCommittedData();
+  const { data, changedCells } = useCommittedData();
 
   return (
     <Card className="p-4 shrink-0">
@@ -15,8 +15,8 @@ export function DatabaseState() {
       </div>
 
       <div className="flex gap-6">
-        <TableView title="accounts" rows={data.accounts} />
-        <TableView title="products" rows={data.products} />
+        <TableView title="accounts" rows={data.accounts} changes={changedCells.accounts} />
+        <TableView title="products" rows={data.products} changes={changedCells.products} />
       </div>
     </Card>
   );
@@ -25,9 +25,14 @@ export function DatabaseState() {
 interface TableViewProps {
   title: string;
   rows: Record<string, unknown>[];
+  changes?: TableChanges;
 }
 
-function TableView({ title, rows }: TableViewProps) {
+function getRowId(row: Record<string, unknown>): string {
+  return String(row['id'] ?? JSON.stringify(row));
+}
+
+function TableView({ title, rows, changes }: TableViewProps) {
   if (rows.length === 0) {
     return (
       <div>
@@ -54,15 +59,34 @@ function TableView({ title, rows }: TableViewProps) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
-              <tr key={i} className="border-t border-zinc-800">
-                {columns.map((col) => (
-                  <td key={col} className="px-3 py-1.5">
-                    {String(row[col] ?? 'NULL')}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {rows.map((row) => {
+              const rowId = getRowId(row);
+              const rowChanges = changes?.[rowId];
+              const isNewRow = rowChanges && rowChanges.size === columns.length;
+
+              return (
+                <tr
+                  key={rowId}
+                  className={`border-t border-zinc-800 transition-colors duration-300 ${
+                    isNewRow ? 'bg-green-950' : ''
+                  }`}
+                >
+                  {columns.map((col) => {
+                    const isChanged = rowChanges?.has(col) && !isNewRow;
+                    return (
+                      <td
+                        key={col}
+                        className={`px-3 py-1.5 transition-colors duration-300 ${
+                          isChanged ? 'bg-yellow-900/50 text-yellow-200' : ''
+                        }`}
+                      >
+                        {String(row[col] ?? 'NULL')}
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -88,6 +88,13 @@ export class TerminalGateway
 
     const state = this.sessionManager.getSessionState(sessionId) ?? undefined;
 
+    // Broadcast committed data after autocommit queries
+    // When not in explicit transaction, any query commits immediately,
+    // so we refresh the committed data view for all clients
+    if (!error && !state?.inTransaction) {
+      await this.broadcastCommittedData();
+    }
+
     return { sessionId, result, error, state };
   }
 

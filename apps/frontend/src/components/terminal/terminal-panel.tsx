@@ -4,6 +4,7 @@ import type { editor } from 'monaco-editor';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Loader2 } from 'lucide-react';
 import { useSession } from '@/hooks/use-session';
 import { QueryResultView } from './query-result';
 import { SqlPresets } from './sql-presets';
@@ -52,14 +53,6 @@ export function TerminalPanel({
     });
   };
 
-  const handleExecute = () => {
-    executeRef.current();
-  };
-
-  const handleBegin = () => {
-    session.execute('BEGIN');
-  };
-
   const handlePresetSelect = (presetSql: string) => {
     setSql(presetSql);
     editorRef.current?.focus();
@@ -68,6 +61,8 @@ export function TerminalPanel({
   const statusColor = session.state?.inTransaction ? 'bg-yellow-500' : 'bg-green-500';
   const statusText = session.state?.inTransaction ? 'In Transaction' : 'Idle';
 
+  const reversedLog = [...session.log].reverse();
+
   return (
     <Card className="flex flex-col h-full p-4 gap-3 overflow-hidden">
       {/* Header */}
@@ -75,8 +70,12 @@ export function TerminalPanel({
         <div className="flex items-center gap-2">
           <span className="font-semibold">{title}</span>
           <Badge variant="outline" className="gap-1.5">
-            <span className={`w-2 h-2 rounded-full ${statusColor}`} />
-            {statusText}
+            {session.isLoading ? (
+              <Loader2 className="w-3 h-3 animate-spin" />
+            ) : (
+              <span className={`w-2 h-2 rounded-full ${statusColor}`} />
+            )}
+            {session.isLoading ? 'Running...' : statusText}
           </Badge>
         </div>
         <IsolationSelect
@@ -107,6 +106,7 @@ export function TerminalPanel({
             lineNumbers: 'on',
             scrollBeyondLastLine: false,
             automaticLayout: true,
+            readOnly: session.isLoading,
           }}
         />
       </div>
@@ -115,17 +115,17 @@ export function TerminalPanel({
       <div className="flex gap-2 shrink-0">
         <Button
           variant={session.state?.inTransaction ? 'outline' : 'default'}
-          onClick={handleBegin}
+          onClick={() => session.execute('BEGIN')}
           disabled={session.isLoading || !session.state || session.state.inTransaction}
         >
           BEGIN
         </Button>
         <Button
           variant="secondary"
-          onClick={handleExecute}
+          onClick={() => executeRef.current()}
           disabled={session.isLoading || !session.state}
         >
-          Run
+          {session.isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Run'}
         </Button>
         <Button
           variant="outline"
@@ -141,10 +141,32 @@ export function TerminalPanel({
         >
           Rollback
         </Button>
-        {session.lastResult && (
-          <span className="ml-auto text-sm text-zinc-400">
-            {session.lastResult.rowCount} rows • {session.lastResult.duration}ms
-          </span>
+      </div>
+
+      {/* Activity Log */}
+      <div className="shrink-0 h-[90px] overflow-y-auto bg-zinc-900/50 rounded border border-zinc-800 px-2 py-1.5">
+        {reversedLog.length === 0 ? (
+          <span className="text-xs text-zinc-500">Ready</span>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            {reversedLog.map((entry) => (
+              <div
+                key={entry.id}
+                className={`text-xs font-mono flex gap-2 ${
+                  entry.type === 'success'
+                    ? 'text-green-400'
+                    : entry.type === 'error'
+                      ? 'text-red-400'
+                      : entry.type === 'warning'
+                        ? 'text-yellow-400'
+                        : 'text-zinc-400'
+                }`}
+              >
+                <span className="text-zinc-600 shrink-0">{entry.timestamp}</span>
+                <span className="truncate">{entry.message}</span>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
