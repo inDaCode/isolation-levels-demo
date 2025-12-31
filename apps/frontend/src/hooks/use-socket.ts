@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { socket } from '@/lib/socket-client';
 import type { Socket } from 'socket.io-client';
 
-type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
 interface UseSocketReturn {
   socket: Socket;

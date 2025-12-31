@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { Card } from '@/components/ui/card';
@@ -11,15 +11,21 @@ import { SqlPresets } from './sql-presets';
 import { IsolationSelect } from './isolation-select';
 import type { IsolationLevel } from '@isolation-demo/shared';
 
+export interface TerminalHandle {
+  setSql: (sql: string) => void;
+  execute: () => void;
+  setIsolationLevel: (level: IsolationLevel) => void;
+}
+
 interface TerminalPanelProps {
   terminalId: number;
   defaultIsolationLevel?: IsolationLevel;
 }
 
-export function TerminalPanel({
-  terminalId,
-  defaultIsolationLevel = 'READ COMMITTED',
-}: TerminalPanelProps) {
+export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(function TerminalPanel(
+  { terminalId, defaultIsolationLevel = 'READ COMMITTED' },
+  ref,
+) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const initializedRef = useRef(false);
   const [sql, setSql] = useState('SELECT * FROM accounts;');
@@ -41,6 +47,24 @@ export function TerminalPanel({
       session.create(defaultIsolationLevel);
     }
   }, [session, defaultIsolationLevel]);
+
+  // Expose methods to parent
+  useImperativeHandle(
+    ref,
+    () => ({
+      setSql: (newSql: string) => {
+        setSql(newSql);
+        editorRef.current?.focus();
+      },
+      execute: () => {
+        executeRef.current();
+      },
+      setIsolationLevel: (level: IsolationLevel) => {
+        session.setIsolationLevel(level);
+      },
+    }),
+    [session],
+  );
 
   const handleEditorMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
@@ -157,6 +181,7 @@ export function TerminalPanel({
                 automaticLayout: true,
                 readOnly: session.isLoading,
                 padding: { top: 8, bottom: 8 },
+                wordWrap: 'on',
               }}
             />
           </div>
@@ -219,4 +244,4 @@ export function TerminalPanel({
       </div>
     </Card>
   );
-}
+});
