@@ -2,22 +2,28 @@
 
 ## Что сделано
 
-### Backend (NestJS) — готов
+### Backend (NestJS)
 
 - WebSocket gateway для управления SQL сессиями
 - `SessionManagerService` — управление PostgreSQL подключениями
 - Каждый терминал = отдельная PG сессия с собственным isolation level
 - События: create/execute/commit/rollback/setIsolation
 - Setup endpoint для сброса схемы БД
-- Broadcast committed данных после каждого commit
+- Broadcast committed данных после каждого commit и autocommit
+- Явное управление транзакциями (BEGIN открывает, COMMIT/ROLLBACK закрывает)
 
-### Frontend (React + Vite) — базовый функционал
+### Frontend (React + Vite)
 
 - Два терминала с Monaco Editor
-- Выбор isolation level для каждого терминала
-- Выполнение SQL, commit, rollback
-- Отображение результатов запросов
-- Панель Committed Data — показывает актуальное состояние БД
+- Выбор isolation level с описаниями (dropdown с пояснениями)
+- SQL presets toolbar (SELECT, UPDATE, LOCK категории)
+- Выполнение SQL, BEGIN, Commit, Rollback
+- Activity log в каждом терминале (с timestamp, цветовая индикация)
+- Loading state (спиннер, readonly editor во время выполнения)
+- Ctrl+Enter для выполнения запроса
+- Панель Committed Data с подсветкой изменений:
+  - Жёлтая подсветка — изменённые ячейки
+  - Зелёная подсветка — новые строки
 - Auto-setup схемы при загрузке + кнопка Reset DB
 
 ### Shared (TypeScript types)
@@ -39,7 +45,7 @@ isolation-levels-demo/
 │       └── src/
 │           ├── components/
 │           │   ├── layout/        # Header
-│           │   ├── terminal/      # TerminalPanel, QueryResultView
+│           │   ├── terminal/      # TerminalPanel, QueryResultView, SqlPresets, IsolationSelect
 │           │   └── database-state/# DatabaseState
 │           ├── hooks/             # useSocket, useSession, useDatabaseSetup, useCommittedData
 │           └── lib/               # socket-client
@@ -60,16 +66,24 @@ pnpm dev                    # Backend :3000, Frontend :5173
 
 1. **Explanation panel** — контекстные подсказки что происходит
 2. **Scenarios режим** — пошаговые демонстрации isolation phenomena
-3. **UX polish** — resizable панели, горячие клавиши (Ctrl+Enter = Run)
-4. **Тесты** — unit для SessionManagerService, integration для gateway
-5. **CI** — GitHub Actions (lint + test + build)
+3. **Тесты** — unit для SessionManagerService, integration для gateway
+4. **CI** — GitHub Actions (lint + test + build)
 
 ## Ключевые решения
 
 - **Один WebSocket, несколько сессий** — sessionId связывает запрос с PG подключением
 - **ESM everywhere** — shared пакет в ESM, backend переведён на ESM
 - **Auto-reset при старте** — пользователь сразу видит данные
-- **Committed Data обновляется автоматически** — broadcast после каждого commit
+- **Committed Data обновляется автоматически** — broadcast после commit и autocommit
+- **Явные транзакции** — BEGIN обязателен для старта транзакции, без него запросы в autocommit
+- **Activity log в хуке** — логирование инкапсулировано в useSession, не в компоненте
+
+## Отложенные идеи (v2)
+
+- **Uncommitted data view** — показывать незакоммиченные изменения в общем окне
+  - Требует broadcast per-session данных через WebSocket
+  - Архитектурно правильнее чем props drilling
+- **Lock visualization** — показывать ожидание блокировок через pg_locks
 
 ## Известные ограничения
 

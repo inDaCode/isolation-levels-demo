@@ -4,7 +4,7 @@ import type { editor } from 'monaco-editor';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Play } from 'lucide-react';
 import { useSession } from '@/hooks/use-session';
 import { QueryResultView } from './query-result';
 import { SqlPresets } from './sql-presets';
@@ -12,12 +12,12 @@ import { IsolationSelect } from './isolation-select';
 import type { IsolationLevel } from '@isolation-demo/shared';
 
 interface TerminalPanelProps {
-  title: string;
+  terminalId: number;
   defaultIsolationLevel?: IsolationLevel;
 }
 
 export function TerminalPanel({
-  title,
+  terminalId,
   defaultIsolationLevel = 'READ COMMITTED',
 }: TerminalPanelProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
@@ -58,18 +58,21 @@ export function TerminalPanel({
     editorRef.current?.focus();
   };
 
-  const statusColor = session.state?.inTransaction ? 'bg-yellow-500' : 'bg-green-500';
-  const statusText = session.state?.inTransaction ? 'In Transaction' : 'Idle';
+  const inTransaction = session.state?.inTransaction ?? false;
+  const statusColor = inTransaction ? 'bg-yellow-500' : 'bg-green-500';
+  const statusText = inTransaction ? 'In Transaction' : 'Idle';
+  const canRun = !session.isLoading && session.state && sql.trim();
 
-  const reversedLog = [...session.log].reverse();
+  const reversedLog = [...session.log].reverse().slice(0, 3);
+  const showResult = session.lastResult && !session.lastWasTransactionCommand;
 
   return (
     <Card className="flex flex-col h-full p-4 gap-3 overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2">
-          <span className="font-semibold">{title}</span>
-          <Badge variant="outline" className="gap-1.5">
+          <span className="font-semibold">Terminal {terminalId}</span>
+          <Badge variant="outline" className="gap-1.5 text-xs">
             {session.isLoading ? (
               <Loader2 className="w-3 h-3 animate-spin" />
             ) : (
@@ -81,72 +84,109 @@ export function TerminalPanel({
         <IsolationSelect
           value={session.state?.isolationLevel ?? defaultIsolationLevel}
           onChange={(level) => session.setIsolationLevel(level)}
-          disabled={session.state?.inTransaction}
+          disabled={inTransaction}
         />
       </div>
 
-      {/* SQL Presets Toolbar */}
-      <div className="flex items-center justify-between shrink-0">
-        <SqlPresets onSelect={handlePresetSelect} disabled={!session.state} />
-        <span className="text-xs text-zinc-500">Ctrl+Enter to run</span>
+      {/* Transaction Controls */}
+      <div
+        className={`shrink-0 p-2.5 rounded border transition-colors ${
+          inTransaction ? 'bg-green-950/20 border-green-800/30' : 'bg-zinc-900/50 border-zinc-800'
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-zinc-400">Transaction</span>
+            <Button
+              variant={inTransaction ? 'outline' : 'secondary'}
+              size="sm"
+              onClick={() => session.execute('BEGIN')}
+              disabled={session.isLoading || !session.state || inTransaction}
+              className="h-7 text-xs font-mono"
+            >
+              BEGIN
+            </Button>
+          </div>
+          <div className="flex items-center gap-2">
+            {inTransaction && <span className="text-xs text-green-400 mr-2">Active</span>}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => session.commit()}
+              disabled={session.isLoading || !inTransaction}
+              className="h-7 text-xs font-mono"
+            >
+              COMMIT
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => session.rollback()}
+              disabled={session.isLoading || !inTransaction}
+              className="h-7 text-xs font-mono"
+            >
+              ROLLBACK
+            </Button>
+          </div>
+        </div>
       </div>
 
-      {/* Editor */}
-      <div className="h-[200px] shrink-0 border border-zinc-800 rounded overflow-hidden">
-        <Editor
-          height="100%"
-          defaultLanguage="sql"
-          value={sql}
-          onChange={(value) => setSql(value ?? '')}
-          onMount={handleEditorMount}
-          theme="vs-dark"
-          options={{
-            minimap: { enabled: false },
-            fontSize: 14,
-            lineNumbers: 'on',
-            scrollBeyondLastLine: false,
-            automaticLayout: true,
-            readOnly: session.isLoading,
-          }}
-        />
-      </div>
+      {/* Presets + Editor + Run */}
+      <div className="flex gap-3 shrink-0 items-start">
+        {/* Presets слева */}
+        <div className="flex flex-col gap-1.5 shrink-0">
+          <SqlPresets onSelect={handlePresetSelect} disabled={!session.state} />
+        </div>
 
-      {/* Controls */}
-      <div className="flex gap-2 shrink-0">
-        <Button
-          variant={session.state?.inTransaction ? 'outline' : 'default'}
-          onClick={() => session.execute('BEGIN')}
-          disabled={session.isLoading || !session.state || session.state.inTransaction}
-        >
-          BEGIN
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={() => executeRef.current()}
-          disabled={session.isLoading || !session.state}
-        >
-          {session.isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Run'}
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => session.commit()}
-          disabled={session.isLoading || !session.state?.inTransaction}
-        >
-          Commit
-        </Button>
-        <Button
-          variant="outline"
-          onClick={() => session.rollback()}
-          disabled={session.isLoading || !session.state?.inTransaction}
-        >
-          Rollback
-        </Button>
+        {/* Editor по центру */}
+        <div className="flex-1 flex flex-col gap-1.5">
+          <span className="text-xs text-zinc-500">Query</span>
+          <div className="h-[160px] border border-zinc-800 rounded overflow-hidden">
+            <Editor
+              height="100%"
+              defaultLanguage="sql"
+              value={sql}
+              onChange={(value) => setSql(value ?? '')}
+              onMount={handleEditorMount}
+              theme="vs-dark"
+              options={{
+                minimap: { enabled: false },
+                fontSize: 13,
+                lineNumbers: 'on',
+                scrollBeyondLastLine: false,
+                automaticLayout: true,
+                readOnly: session.isLoading,
+                padding: { top: 8, bottom: 8 },
+              }}
+            />
+          </div>
+        </div>
+
+        {/* Run справа */}
+        <div className="flex flex-col gap-1.5 shrink-0">
+          <span className="text-xs text-zinc-500">Run</span>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => executeRef.current()}
+            disabled={!canRun}
+            className={`h-8 px-3 ${canRun ? 'text-green-400 hover:text-green-300' : ''}`}
+          >
+            {session.isLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Play className={`w-4 h-4 mr-1.5 ${canRun ? 'text-green-400' : ''}`} />
+            )}
+            Run
+          </Button>
+          <span className="text-xs text-zinc-600 text-center">Ctrl+Enter</span>
+        </div>
       </div>
 
       {/* Activity Log */}
-      <div className="shrink-0 h-[90px] overflow-y-auto bg-zinc-900/50 rounded border border-zinc-800 px-2 py-1.5">
+      <div className="shrink-0 min-h-[48px] bg-zinc-900/30 rounded px-2 py-1.5">
         {reversedLog.length === 0 ? (
-          <span className="text-xs text-zinc-500">Ready</span>
+          <span className="text-xs text-zinc-600">Ready</span>
         ) : (
           <div className="flex flex-col gap-0.5">
             {reversedLog.map((entry) => (
@@ -159,7 +199,7 @@ export function TerminalPanel({
                       ? 'text-red-400'
                       : entry.type === 'warning'
                         ? 'text-yellow-400'
-                        : 'text-zinc-400'
+                        : 'text-zinc-500'
                 }`}
               >
                 <span className="text-zinc-600 shrink-0">{entry.timestamp}</span>
@@ -172,7 +212,10 @@ export function TerminalPanel({
 
       {/* Results */}
       <div className="flex-1 min-h-0 overflow-hidden">
-        <QueryResultView result={session.lastResult} error={session.lastError} />
+        <QueryResultView
+          result={showResult ? session.lastResult : null}
+          error={session.lastError}
+        />
       </div>
     </Card>
   );

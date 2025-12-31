@@ -7,7 +7,7 @@ import {
   DropdownMenuLabel,
 } from '@/components/ui/dropdown-menu';
 import { Button } from '@/components/ui/button';
-import { ChevronDown } from 'lucide-react';
+import { ChevronRight } from 'lucide-react';
 
 interface SqlPreset {
   label: string;
@@ -69,7 +69,7 @@ const PRESET_CATEGORIES: PresetCategory[] = [
   },
   {
     name: 'LOCK',
-    note: 'Locks work the same on all isolation levels — this demonstrates concurrency control, not visibility',
+    note: 'Locks work the same on all isolation levels',
     presets: [
       {
         label: 'FOR UPDATE',
@@ -77,7 +77,7 @@ const PRESET_CATEGORIES: PresetCategory[] = [
         tooltip: 'Exclusive row lock — blocks other FOR UPDATE and writes on same row',
       },
       {
-        label: 'FOR UPDATE SKIP LOCKED',
+        label: 'SKIP LOCKED',
         sql: 'SELECT * FROM accounts FOR UPDATE SKIP LOCKED;',
         tooltip: 'Skip locked rows — useful for job queues, returns only unlocked rows',
       },
@@ -102,16 +102,22 @@ interface SqlPresetsProps {
 
 export function SqlPresets({ onSelect, disabled }: SqlPresetsProps) {
   return (
-    <div className="flex gap-1">
+    <div className="flex flex-col gap-1">
+      <span className="text-xs text-zinc-500 px-1 mb-0.5">Presets</span>
       {PRESET_CATEGORIES.map((category) => (
         <DropdownMenu key={category.name}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" disabled={disabled} className="h-7 px-2 text-xs">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={disabled}
+              className="h-8 px-3 text-xs justify-between w-[100px]"
+            >
               {category.name}
-              <ChevronDown className="ml-1 h-3 w-3" />
+              <ChevronRight className="h-3 w-3 ml-1" />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-[300px]">
+          <DropdownMenuContent align="start" side="right" className="w-[280px]">
             {category.note && (
               <>
                 <DropdownMenuLabel className="text-xs font-normal text-yellow-500">

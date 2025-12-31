@@ -8,7 +8,7 @@ Target audience: developers learning database concepts.
 ## Stack
 
 - **Monorepo**: pnpm workspaces
-- **Frontend**: React 18, TypeScript, Shadcn/ui, Tailwind, Monaco Editor
+- **Frontend**: React 19, TypeScript, Shadcn/ui, Tailwind, Monaco Editor
 - **Backend**: NestJS, TypeScript, Socket.io, node-postgres (pg)
 - **Database**: PostgreSQL 16
 
@@ -19,14 +19,17 @@ Target audience: developers learning database concepts.
 - Two SQL terminals (Monaco Editor)
 - Each terminal = separate database session
 - WebSocket connection for real-time results
-- Educational tooltips explaining what happens
+- SQL presets toolbar with educational tooltips
+- Activity log per terminal
+- Committed Data panel with change highlighting
 
 ### Backend (apps/backend)
 
 - WebSocket gateway for terminal sessions
 - Each session maintains its own pg connection
-- Transaction state management per session
-- Preset scenarios for common isolation phenomena
+- Explicit transaction management (BEGIN/COMMIT/ROLLBACK)
+- Autocommit for queries outside explicit transactions
+- Broadcast committed data to all clients after changes
 
 ## Key Concepts
 
@@ -49,6 +52,12 @@ isolation-levels-demo/
 │   │       ├── database/     # SessionManagerService
 │   │       └── gateway/      # TerminalGateway (WebSocket)
 │   └── frontend/             # React app
+│       └── src/
+│           ├── components/
+│           │   ├── layout/         # Header
+│           │   ├── terminal/       # TerminalPanel, SqlPresets, IsolationSelect
+│           │   └── database-state/ # DatabaseState (committed data view)
+│           └── hooks/              # useSocket, useSession, useCommittedData
 ├── packages/
 │   └── shared/               # Shared types (@isolation-demo/shared)
 ├── docker-compose.yml
@@ -61,18 +70,36 @@ isolation-levels-demo/
 
 Client → Server:
 
-- `session:create` → creates new pg connection
-- `session:execute` → { sessionId, sql }
-- `session:commit` → { sessionId }
-- `session:rollback` → { sessionId }
-- `session:setIsolation` → { sessionId, level }
+- `session:create` → creates new pg connection with isolation level
+- `session:execute` → { sessionId, sql } — executes SQL, handles BEGIN/COMMIT/ROLLBACK
+- `session:commit` → { sessionId } — commits transaction
+- `session:rollback` → { sessionId } — rolls back transaction
+- `session:setIsolation` → { sessionId, level } — changes isolation level (only outside transaction)
+- `setup:execute` → { sql } — resets database schema
+- `data:getCommitted` → { table } — fetches current committed data
 
 Server → Client:
 
-- `session:created` → { sessionId }
-- `session:result` → { sessionId, rows, rowCount, error }
-- `session:status` → { sessionId, inTransaction, isolationLevel }
-- `data:committed` → { table, rows }
+- `session:created` → { sessionId, state }
+- `session:result` → { sessionId, result, error, state }
+- `data:committed` → { table, rows } — broadcast after commits/autocommits
+
+## Data Flow
+
+```
+Terminal executes query
+        ↓
+    Gateway receives
+        ↓
+    SessionManager executes on PG connection
+        ↓
+    Returns result + updated state
+        ↓
+    If autocommit (not in transaction):
+        → Broadcast data:committed to ALL clients
+        ↓
+    DatabaseState updates for everyone
+```
 
 ## Conventions
 
@@ -90,16 +117,19 @@ Server → Client:
 
 ## Roadmap
 
-### v1.0
+### v1.0 (current)
 
-- Two parallel SQL terminals
-- Isolation level selection
-- Real-time committed state view
-- Educational tooltips
-- Preset scenarios
+- [x] Two parallel SQL terminals
+- [x] Isolation level selection with descriptions
+- [x] Real-time committed state view with change highlighting
+- [x] SQL presets with educational tooltips
+- [x] Activity log per terminal
+- [ ] Explanation panel
+- [ ] Preset scenarios (step-by-step demos)
 
 ### v2.0
 
-- EXPLAIN ANALYZE visualization
-- Real-time lock monitoring (`pg_locks`)
+- Uncommitted data visualization (per-session broadcast)
+- Lock monitoring (`pg_locks`)
 - Deadlock detection and visualization
+- EXPLAIN ANALYZE visualization

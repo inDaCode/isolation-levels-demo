@@ -22,6 +22,7 @@ interface UseSessionReturn {
   state: SessionState | null;
   lastResult: QueryResult | null;
   lastError: QueryError | null;
+  lastWasTransactionCommand: boolean;
   log: LogEntry[];
   isLoading: boolean;
   create: (isolationLevel?: IsolationLevel) => Promise<void>;
@@ -32,6 +33,12 @@ interface UseSessionReturn {
 }
 
 const MAX_LOG_ENTRIES = 10;
+
+const TRANSACTION_COMMANDS = ['BEGIN', 'BEGIN;', 'COMMIT', 'COMMIT;', 'ROLLBACK', 'ROLLBACK;'];
+
+function isTransactionCommand(sql: string): boolean {
+  return TRANSACTION_COMMANDS.includes(sql.trim().toUpperCase());
+}
 
 function formatTime(): string {
   return new Date().toLocaleTimeString('en-US', {
@@ -46,6 +53,7 @@ export function useSession(): UseSessionReturn {
   const [state, setState] = useState<SessionState | null>(null);
   const [lastResult, setLastResult] = useState<QueryResult | null>(null);
   const [lastError, setLastError] = useState<QueryError | null>(null);
+  const [lastWasTransactionCommand, setLastWasTransactionCommand] = useState(false);
   const [log, setLog] = useState<LogEntry[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const logIdRef = useRef(0);
@@ -77,8 +85,11 @@ export function useSession(): UseSessionReturn {
     async (sql: string) => {
       if (!state) return;
 
+      const isTxCommand = isTransactionCommand(sql);
+      setLastWasTransactionCommand(isTxCommand);
       setIsLoading(true);
       setLastError(null);
+
       try {
         const response: QueryResultEvent = await socket.emitWithAck(WS_EVENTS.SESSION_EXECUTE, {
           sessionId: state.sessionId,
@@ -96,6 +107,10 @@ export function useSession(): UseSessionReturn {
           if (sqlUpper === 'BEGIN' || sqlUpper === 'BEGIN;') {
             const level = response.state?.isolationLevel ?? state.isolationLevel;
             addLog(`BEGIN (${level})`, 'success');
+          } else if (sqlUpper === 'COMMIT' || sqlUpper === 'COMMIT;') {
+            addLog('COMMIT ✓', 'success');
+          } else if (sqlUpper === 'ROLLBACK' || sqlUpper === 'ROLLBACK;') {
+            addLog('ROLLBACK', 'warning');
           } else {
             const preview = sql.trim().slice(0, 25) + (sql.length > 25 ? '...' : '');
             addLog(
@@ -118,6 +133,7 @@ export function useSession(): UseSessionReturn {
   const commit = useCallback(async () => {
     if (!state) return;
 
+    setLastWasTransactionCommand(true);
     setIsLoading(true);
     try {
       const response: SessionOperationResult = await socket.emitWithAck(WS_EVENTS.SESSION_COMMIT, {
@@ -125,6 +141,7 @@ export function useSession(): UseSessionReturn {
       });
       if (response.state) {
         setState(response.state);
+        setLastResult(null);
         addLog('COMMIT ✓', 'success');
       } else if (response.error) {
         setLastError({ message: response.error });
@@ -138,6 +155,7 @@ export function useSession(): UseSessionReturn {
   const rollback = useCallback(async () => {
     if (!state) return;
 
+    setLastWasTransactionCommand(true);
     setIsLoading(true);
     try {
       const response: SessionOperationResult = await socket.emitWithAck(
@@ -146,6 +164,7 @@ export function useSession(): UseSessionReturn {
       );
       if (response.state) {
         setState(response.state);
+        setLastResult(null);
         addLog('ROLLBACK', 'warning');
       } else if (response.error) {
         setLastError({ message: response.error });
@@ -179,6 +198,7 @@ export function useSession(): UseSessionReturn {
     state,
     lastResult,
     lastError,
+    lastWasTransactionCommand,
     log,
     isLoading,
     create,

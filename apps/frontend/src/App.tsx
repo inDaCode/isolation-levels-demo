@@ -3,6 +3,7 @@ import { useDatabaseSetup } from '@/hooks/use-database-setup';
 import { Header } from '@/components/layout/header';
 import { TerminalPanel } from '@/components/terminal/terminal-panel';
 import { DatabaseState } from '@/components/database-state/database-state';
+import { ExplanationPanel } from '@/components/explanation/explanation-panel';
 
 function App() {
   const { status } = useSocket();
@@ -15,12 +16,7 @@ function App() {
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
-      <Header
-        connectionStatus={status}
-        onReset={reset}
-        isResetting={isResetting}
-        setupError={setupError}
-      />
+      <Header connectionStatus={status} setupError={setupError} />
 
       <main className="flex-1 p-4 overflow-hidden flex flex-col gap-4">
         {status !== 'connected' ? (
@@ -33,10 +29,11 @@ function App() {
           </div>
         ) : (
           <>
-            <DatabaseState />
+            <ExplanationPanel />
+            <DatabaseState onReset={reset} isResetting={isResetting} />
             <div className="flex-1 grid grid-cols-2 gap-4 min-h-0">
-              <TerminalPanel title="Terminal 1" defaultIsolationLevel="READ COMMITTED" />
-              <TerminalPanel title="Terminal 2" defaultIsolationLevel="READ COMMITTED" />
+              <TerminalPanel terminalId={1} defaultIsolationLevel="READ COMMITTED" />
+              <TerminalPanel terminalId={2} defaultIsolationLevel="READ COMMITTED" />
             </div>
           </>
         )}
