@@ -15,6 +15,7 @@
 ### Frontend (React + Vite)
 
 - **3 терминала** с Monaco Editor (для демонстрации chain deadlock и других сценариев)
+- **Zustand store** для централизованного управления сессиями
 - Выбор isolation level с описаниями (dropdown с пояснениями)
 - SQL presets toolbar (SELECT, UPDATE, LOCK категории) — вертикально слева от редактора
 - Выполнение SQL, BEGIN, Commit, Rollback
@@ -25,11 +26,10 @@
 - **Scenario Mode:**
   - Выбор сценария из dropdown в Header
   - ScenarioPanel с пошаговыми инструкциями
-  - Кнопка "Copy to Terminal" для копирования SQL
+  - Кнопки Copy и Run для копирования/выполнения SQL
   - Навигация по шагам (Back / Next)
   - Conclusion с описанием проблемы и решения
 - **ExplanationPanel** в режиме Sandbox (welcome message)
-- `forwardRef` для управления терминалами из сценариев
 
 ### Shared (TypeScript types)
 
@@ -55,8 +55,9 @@ isolation-levels-demo/
 │           │   ├── database-state/ # DatabaseState
 │           │   ├── explanation/    # ExplanationPanel
 │           │   └── scenario/       # ScenarioSelect, ScenarioPanel
+│           ├── stores/             # session-store.ts (Zustand)
 │           ├── data/               # scenarios.ts (данные сценариев)
-│           ├── hooks/              # useSocket, useSession, useDatabaseSetup, useCommittedData, useScenario
+│           ├── hooks/              # useSocket, useDatabaseSetup, useCommittedData, useScenario
 │           └── lib/                # socket-client
 ├── packages/
 │   └── shared/               # @isolation-demo/shared — типы, SETUP_SQL
@@ -80,35 +81,32 @@ pnpm dev                    # Backend :3000, Frontend :5173
 
 ## Что осталось сделать (по приоритету)
 
-1. **Исправить "Run in Terminal"** — автоматическое выполнение из сценария не работает
-2. **Добавить больше сценариев:**
+1. **Добавить больше сценариев:**
    - Phantom Read
    - Lost Update + защита с FOR UPDATE
    - Chain Deadlock (3 терминала)
    - Lock Queue (3 терминала)
-3. **Тесты** — unit для SessionManagerService, integration для gateway
-4. **CI** — GitHub Actions (lint + test + build)
+2. **Тесты** — unit для session-store, integration для gateway
+3. **CI** — GitHub Actions (lint + test + build)
 
 ## Ключевые решения
 
+- **Zustand для session state** — централизованное управление, ScenarioPanel и TerminalPanel работают с одним store без prop drilling и refs
 - **Один WebSocket, несколько сессий** — sessionId связывает запрос с PG подключением
 - **ESM everywhere** — shared пакет в ESM, backend переведён на ESM
 - **Auto-reset при старте** — пользователь сразу видит данные
 - **Committed Data обновляется автоматически** — broadcast после commit и autocommit
 - **Явные транзакции** — BEGIN обязателен для старта транзакции, без него запросы в autocommit
-- **Activity log в хуке** — логирование инкапсулировано в useSession
+- **Activity log в store** — логирование инкапсулировано в session-store
 - **Типы сценариев в shared, данные на фронте** — правильное разделение для монорепы
 - **3 терминала** — для демонстрации chain deadlock и lock queue
-- **Guided scenarios** — пользователь выполняет шаги вручную, не автоматизация
 
 ## Отложенные идеи (v2)
 
 - **Uncommitted data view** — показывать незакоммиченные изменения
 - **Lock visualization** — показывать ожидание блокировок через pg_locks
-- **Auto-execute в сценариях** — кнопка "Run in Terminal" (требует отладки)
 
 ## Известные ограничения
 
 - Нет reconnect логики при потере сессии (рефреш страницы)
 - Нет валидации SQL на фронте
-- "Run in Terminal" из сценария временно отключён

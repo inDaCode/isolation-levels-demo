@@ -2,36 +2,62 @@
 
 ## Overview
 
-React SPA для демонстрации уровней изоляции PostgreSQL. Два режима работы:
+React SPA demonstrating PostgreSQL transaction isolation levels. Two modes:
 
-- **Sandbox** — свободный ввод и эксперименты
-- **Scenarios** — пошаговые guided-демонстрации isolation phenomena
+- **Sandbox** — free-form SQL experimentation
+- **Scenarios** — guided step-by-step demos of isolation phenomena
 
-## Core Concepts
+## Design Decisions
 
-### Independent Terminal Sessions
+### Why Zustand over Context/Redux?
 
-- **3 терминала** = 3 отдельные PostgreSQL сессии
-- Каждый терминал имеет свой уровень изоляции
-- Позволяет демонстрировать chain deadlock и lock queue (требуют 3 участников)
+**Problem:** ScenarioPanel needs to execute SQL in any terminal. Initially used `forwardRef` + `useImperativeHandle`, but this created timing issues between `setSql()` and `execute()` calls.
 
-### Explicit Transactions
+**Options considered:**
 
-- Запросы вне транзакции выполняются в autocommit режиме
-- BEGIN явно открывает транзакцию с выбранным isolation level
-- COMMIT/ROLLBACK закрывают транзакцию
+1. **Keep refs, fix timing** — adds complexity, imperative API is a code smell for this use case
+2. **Lift state to App + Context** — works, but callbacks recreate on every state change (stale closures)
+3. **Redux** — overkill for 3 terminals, too much boilerplate
+4. **Zustand** — minimal API, stable action references, granular subscriptions
 
-### Committed Data as Source of Truth
+**Decision:** Zustand. Clean separation between state and UI, no prop drilling, each terminal subscribes only to its own data.
 
-- Database State показывает только committed данные
-- Подсветка изменений: жёлтая — изменённые ячейки, зелёная — новые строки
-- Broadcast всем клиентам после commit и autocommit
+### Why 3 Terminals?
 
-### Guided Scenarios
+Most isolation demos use 2 sessions. We use 3 because:
 
-- Пользователь выполняет шаги вручную (не автоматизация)
-- ScenarioPanel показывает инструкции и SQL для копирования
-- Терминалы остаются полностью функциональными
+- Chain deadlock requires 3 participants (A waits for B, B waits for C, C waits for A)
+- Lock queue visualization needs a "waiting" transaction while two others hold/request locks
+- Demonstrates real-world complexity
+
+### Why SQL in Store (not local state)?
+
+ScenarioPanel needs to both set SQL and execute it in a terminal. With local state:
+
+```typescript
+// Race condition: state update is async
+terminalRef.setSql(sql);
+terminalRef.execute(); // executes OLD sql
+```
+
+With store:
+
+```typescript
+setSql(terminalId, sql); // immediate
+execute(terminalId); // reads from store
+```
+
+Single source of truth, no timing issues.
+
+### Why Scenarios on Frontend (not Backend)?
+
+Scenarios are UI/educational content, not business logic. Backend only needs to execute SQL — it doesn't need to know about "steps" or "explanations".
+
+This also allows:
+
+- Adding scenarios without backend changes
+- Different scenario sets for different audiences (future)
+- Offline scenario browsing (future)
 
 ## Component Architecture
 
@@ -42,247 +68,175 @@ src/
 │   │   └── header.tsx              # Logo, scenario select, connection status
 │   │
 │   ├── terminal/
-│   │   ├── terminal-panel.tsx      # Monaco editor + controls + activity log (forwardRef)
-│   │   ├── query-result.tsx        # Query results table / error display
-│   │   ├── sql-presets.tsx         # SELECT/UPDATE/LOCK vertical dropdown menus
-│   │   └── isolation-select.tsx    # Isolation level dropdown with descriptions
+│   │   ├── terminal-panel.tsx      # Monaco editor + controls + activity log
+│   │   ├── query-result.tsx        # Results table / error display
+│   │   ├── sql-presets.tsx         # Quick-access SQL snippets
+│   │   └── isolation-select.tsx    # Isolation level dropdown
 │   │
 │   ├── database-state/
-│   │   └── database-state.tsx      # Committed data tables + Reset button
+│   │   └── database-state.tsx      # Committed data view + Reset
 │   │
 │   ├── explanation/
-│   │   └── explanation-panel.tsx   # Welcome message in Sandbox mode
+│   │   └── explanation-panel.tsx   # Sandbox mode welcome
 │   │
 │   ├── scenario/
-│   │   ├── scenario-select.tsx     # Dropdown для выбора сценария
-│   │   └── scenario-panel.tsx      # Step-by-step instructions
+│   │   ├── scenario-select.tsx     # Scenario picker dropdown
+│   │   └── scenario-panel.tsx      # Step instructions + Copy/Run
 │   │
-│   └── ui/                         # Shadcn/ui components
+│   └── ui/                         # Shadcn/ui primitives
 │
-├── data/
-│   └── scenarios.ts                # Scenario definitions (типы в shared)
+├── stores/
+│   └── session-store.ts            # Terminal sessions state + actions
 │
 ├── hooks/
-│   ├── use-socket.ts               # Socket.io connection management
-│   ├── use-session.ts              # Terminal session state + activity log
+│   ├── use-socket.ts               # Connection management
 │   ├── use-committed-data.ts       # Committed data + change detection
-│   ├── use-database-setup.ts       # Initial schema setup
-│   └── use-scenario.ts             # Scenario state management
+│   ├── use-database-setup.ts       # Schema initialization
+│   └── use-scenario.ts             # Scenario navigation
+│
+├── data/
+│   └── scenarios.ts                # Scenario definitions
 │
 ├── lib/
 │   └── socket-client.ts            # Socket.io instance
 │
-└── App.tsx                         # Main layout, orchestrates components
+└── App.tsx                         # Layout orchestration
 ```
 
 ## State Management
 
-React hooks, без внешних state managers.
-
 ```
-App
-├── useSocket()                    # Connection status
-├── useDatabaseSetup()             # Schema initialization
-├── useScenario()                  # Current scenario, step navigation
-├── terminalRefs                   # Refs для управления терминалами из сценариев
-├── TerminalPanel × 3
-│   └── useSession()               # Per-terminal: state, results, log
-└── DatabaseState
-    └── useCommittedData()         # Committed data + change tracking
+┌─────────────────────────────────────────────────────────────┐
+│                        Zustand Store                        │
+│  ┌─────────────────────────────────────────────────────┐   │
+│  │ sessions: { 1: TerminalSession, 2: ..., 3: ... }    │   │
+│  │ actions: setSql, execute, commit, rollback, ...     │   │
+│  └─────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+        ▲                    ▲                    ▲
+        │                    │                    │
+   TerminalPanel(1)    TerminalPanel(2)    ScenarioPanel
+   subscribes to       subscribes to       calls actions
+   sessions[1]         sessions[2]         for any terminal
 ```
 
-### Почему нет Zustand/Redux
+### Store Structure
 
-- Терминалы независимы, не шарят состояние
-- Committed data приходит через WebSocket broadcast
-- Сценарии управляют терминалами через refs, не через shared state
-- Нет необходимости в cross-component state
+```typescript
+interface SessionStore {
+  sessions: Record<TerminalId, TerminalSession>;
 
-### Когда понадобится store
+  setSql: (terminalId, sql) => void;
+  createSession: (terminalId, isolationLevel?) => Promise<void>;
+  execute: (terminalId) => Promise<void>;
+  commit: (terminalId) => Promise<void>;
+  rollback: (terminalId) => Promise<void>;
+  setIsolationLevel: (terminalId, level) => Promise<void>;
+}
 
-Если добавим отображение uncommitted данных в общем окне — потребуется централизованное хранилище или broadcast per-session данных через WebSocket (предпочтительнее).
+interface TerminalSession {
+  state: SessionState | null; // from backend
+  sql: string; // editor content
+  lastResult: QueryResult | null;
+  lastError: QueryError | null;
+  lastWasTransactionCommand: boolean;
+  log: LogEntry[];
+  isLoading: boolean;
+}
+```
 
 ## Data Flow
 
 ### Query Execution
 
 ```
-User clicks Run (or Ctrl+Enter)
+User clicks Run
        │
        ▼
-useSession.execute(sql)
+store.execute(terminalId)
+       │
+       ├── get sql from sessions[terminalId].sql
+       ├── set isLoading: true
        │
        ▼
-WebSocket: session:execute ──────► Backend
-       │                              │
-       │                              ▼
-       │                         SessionManager.executeQuery()
-       │                              │
-       ▼                              │
-WebSocket: response ◄────────────────┘
+WebSocket: session:execute { sessionId, sql }
        │
-       ├── Update lastResult / lastError
-       ├── Update state (inTransaction)
-       ├── Update lastWasTransactionCommand
-       └── Add to activity log
+       ▼
+Backend executes, returns result
+       │
+       ▼
+store updates sessions[terminalId]
+       │
+       ├── lastResult / lastError
+       ├── state (inTransaction, isolationLevel)
+       ├── log entry
+       └── isLoading: false
 ```
 
-### Scenario Step Execution
+### Scenario Execution
 
 ```
-User clicks "Copy to T1" in ScenarioPanel
+User clicks "Run" in ScenarioPanel
        │
        ▼
-App.handleCopyToTerminal(1, sql)
+store.setSql(step.terminal, step.sql)
        │
        ▼
-terminalRefs.current[1].setSql(sql)
+store.execute(step.terminal)
        │
        ▼
-Terminal 1 editor updates, user clicks Run manually
+TerminalPanel re-renders with new sql + result
 ```
 
 ### Committed Data Broadcast
 
 ```
-Terminal commits (or autocommit)
+Any terminal commits (explicit or autocommit)
        │
        ▼
-Backend: broadcastCommittedData()
+Backend broadcasts: data:committed { table, rows }
        │
        ▼
-WebSocket: data:committed ──────► ALL clients
+useCommittedData hook receives
        │
-       ▼
-useCommittedData receives event
-       │
-       ├── Detect changes vs previous data
-       ├── Update changedCells (for highlighting)
-       └── Clear highlight after 2 seconds
+       ├── diff against previous data
+       ├── mark changed cells
+       └── clear highlights after 2s
 ```
 
-## UI Layout
+## Error Handling Strategy
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  PostgreSQL Isolation Demo     [Scenario: Deadlock ▼]         ● Connected   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌─ Step 3 of 6 ────────────────────────────────────────────────────────┐   │
-│  │  Terminal 1 holds lock on row 1...                                   │   │
-│  │  👉 Execute in Terminal 1:                                           │   │
-│  │  ┌─────────────────────────────────────────────────────────────────┐ │   │
-│  │  │ UPDATE accounts SET balance = 100 WHERE id = 2;                 │ │   │
-│  │  └─────────────────────────────────────────────────────────────────┘ │   │
-│  │  [Copy to T1]                                   [← Back] [Next →]    │   │
-│  └──────────────────────────────────────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  📊 Committed Data                                                  [Reset] │
-│  ┌─ accounts ──────────┐  ┌─ products ─────────┐                           │
-│  │ id │ name  │ balance│  │ id │ name  │ stock │                           │
-│  └─────────────────────┘  └─────────────────────┘                           │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ ┌─ Terminal 1 ────────┐ ┌─ Terminal 2 ────────┐ ┌─ Terminal 3 ────────┐    │
-│ │ ● Idle [READ COM▼]  │ │ ● In Txn [READ C▼]  │ │ ● Idle [READ COM▼]  │    │
-│ │ ┌─ Transaction ───┐ │ │ ┌─ Transaction ───┐ │ │ ┌─ Transaction ───┐ │    │
-│ │ │[BEGIN] [COMMIT] │ │ │ │[BEGIN] [COMMIT] │ │ │ │[BEGIN] [COMMIT] │ │    │
-│ │ │       [ROLLBACK]│ │ │ │       [ROLLBACK]│ │ │ │       [ROLLBACK]│ │    │
-│ │ └─────────────────┘ │ │ └─────────────────┘ │ │ └─────────────────┘ │    │
-│ │ Presets │ Query     │ │ Presets │ Query     │ │ Presets │ Query     │    │
-│ │ [SEL▼]  │ ┌───────┐ │ │ [SEL▼]  │ ┌───────┐ │ │ [SEL▼]  │ ┌───────┐ │    │
-│ │ [UPD▼]  │ │ SQL   │ │ │ [UPD▼]  │ │ SQL   │ │ │ [UPD▼]  │ │ SQL   │ │    │
-│ │ [LOC▼]  │ └───────┘ │ │ [LOC▼]  │ └───────┘ │ │ [LOC▼]  │ └───────┘ │    │
-│ │         [Run ▶]     │ │         [Run ▶]     │ │         [Run ▶]     │    │
-│ │ Activity Log        │ │ Activity Log        │ │ Activity Log        │    │
-│ │ Results             │ │ Results             │ │ Results             │    │
-│ └─────────────────────┘ └─────────────────────┘ └─────────────────────┘    │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+| Error Type        | Handling                                                |
+| ----------------- | ------------------------------------------------------- |
+| Socket disconnect | Show "Connecting...", disable all controls              |
+| Query error       | Display in Results panel, add to log, session continues |
+| Transaction error | Backend auto-rollbacks, state resets to idle            |
+| Network timeout   | Caught in store, logged as "Execution failed"           |
 
-## SQL Presets
+## Styling Conventions
 
-Вертикальные dropdown-меню слева от редактора:
+- **Tailwind CSS** + **Shadcn/ui** for consistency
+- **Dark theme** (zinc-900 base) — easier on eyes for code-heavy UI
+- **Color semantics:**
+  - Green: success, committed, active transaction
+  - Yellow: warning, in-transaction state, changed cells
+  - Red: errors
+  - Blue: informational (scenario panel)
+  - Gray: idle, secondary info
 
-| Category | Queries                                              | Purpose       |
-| -------- | ---------------------------------------------------- | ------------- |
-| SELECT   | `SELECT *`, `WHERE id=1`, `balance`                  | Basic reads   |
-| UPDATE   | `+100`, `-100`, `INSERT`, `DELETE`                   | Modifications |
-| LOCK     | `FOR UPDATE`, `SKIP LOCKED`, `FOR SHARE`, `pg_sleep` | Lock demos    |
+## Performance Considerations
 
-Каждый preset имеет tooltip с объяснением.
+- **Granular subscriptions:** Each TerminalPanel subscribes only to `sessions[terminalId]`, not entire store
+- **Stable action references:** Zustand actions don't change between renders
+- **Monaco Editor:** `automaticLayout: true` handles resize, single instance per terminal
+- **Log trimming:** Max 10 entries per terminal, display last 3
 
-## Activity Log
+## Testing Strategy (Planned)
 
-Каждый терминал показывает последние 3 действия:
+| Layer      | Tool                  | Focus                           |
+| ---------- | --------------------- | ------------------------------- |
+| Store      | Vitest                | Action logic, state transitions |
+| Components | React Testing Library | User interactions               |
+| E2E        | Playwright            | Full scenarios                  |
 
-- Timestamp (HH:MM:SS)
-- Сообщение (query preview, BEGIN, COMMIT, error)
-- Цветовая индикация: info (серый), success (зелёный), warning (жёлтый), error (красный)
-
-Новые записи сверху. Полный лог хранит 10 записей.
-
-## Scenarios
-
-Типы определены в `@isolation-demo/shared`, данные в `src/data/scenarios.ts`.
-
-```typescript
-interface Scenario {
-  id: string;
-  title: string;
-  description: string;
-  difficulty: 'basic' | 'intermediate' | 'advanced';
-  terminals: 2 | 3;
-  setup: {
-    isolationLevels: [IsolationLevel, IsolationLevel, IsolationLevel?];
-  };
-  steps: ScenarioStep[];
-  conclusion: {
-    problem: string;
-    solution: string;
-  };
-}
-
-interface ScenarioStep {
-  terminal: 1 | 2 | 3;
-  sql: string;
-  explanation: string;
-  expectation?: string; // Warning/info about expected result
-}
-```
-
-### Реализованные сценарии
-
-| Scenario            | Terminals | Difficulty   | Shows                                     |
-| ------------------- | --------- | ------------ | ----------------------------------------- |
-| Non-repeatable Read | 2         | Basic        | READ COMMITTED не защищает от изменений   |
-| Deadlock            | 2         | Intermediate | Взаимная блокировка, PostgreSQL detection |
-
-### Планируемые сценарии
-
-| Scenario       | Terminals | Difficulty   | Shows                               |
-| -------------- | --------- | ------------ | ----------------------------------- |
-| Phantom Read   | 2         | Basic        | INSERT виден в той же транзакции    |
-| Lost Update    | 2         | Intermediate | Потеря обновления без FOR UPDATE    |
-| Chain Deadlock | 3         | Advanced     | Циклическая блокировка 3 сессий     |
-| Lock Queue     | 3         | Advanced     | Одна транзакция блокирует остальных |
-
-## Error Handling
-
-- **Socket disconnection** → показываем "Connecting...", disable controls
-- **Query error** → показываем в Results, добавляем в log, сессия остаётся
-- **Transaction error** → автоматический ROLLBACK на backend, сессия сбрасывается
-
-## Styling
-
-- Tailwind CSS + Shadcn/ui
-- Dark theme (zinc-900 background)
-- Monospace font для SQL и результатов
-- Цветовое кодирование:
-  - 🟢 Green — success, committed, new rows, active transaction
-  - 🟡 Yellow — in transaction status, warning, changed cells
-  - 🔴 Red — error
-  - 🔵 Blue — scenario panel
-  - ⚪ Gray — idle, info
-
-## Known Issues
-
-- **"Run in Terminal" из сценария** — временно отключён, требует отладки timing между setSql и execute
+Priority: Store tests first (most logic), E2E for critical paths, component tests where useful.

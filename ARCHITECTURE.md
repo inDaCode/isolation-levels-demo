@@ -1,135 +1,261 @@
-# Isolation Levels Demo
+# Isolation Levels Demo — System Architecture
 
-## Project Purpose
+## Purpose
 
 Interactive educational tool demonstrating PostgreSQL transaction isolation levels.
-Target audience: developers learning database concepts.
+Target: developers learning database concurrency concepts through hands-on experimentation.
 
-## Stack
+## Design Philosophy
 
-- **Monorepo**: pnpm workspaces
-- **Frontend**: React 19, TypeScript, Shadcn/ui, Tailwind, Monaco Editor
-- **Backend**: NestJS, TypeScript, Socket.io, node-postgres (pg)
-- **Database**: PostgreSQL 16
+**Show, don't tell.** Instead of explaining isolation levels with text, users run real transactions and observe the differences. Three terminals allow demonstrating complex scenarios (deadlocks, lock queues) that require multiple participants.
 
-## Architecture
+## System Overview
 
-### Frontend (apps/frontend)
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              Frontend (React)                                │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌──────────────────┐   │
+│  │ Terminal 1  │  │ Terminal 2  │  │ Terminal 3  │  │  Database State  │   │
+│  │ Session A   │  │ Session B   │  │ Session C   │  │  (committed)     │   │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └────────┬─────────┘   │
+│         │                │                │                   │             │
+│         └────────────────┴────────────────┴───────────────────┘             │
+│                                   │                                         │
+│                            Zustand Store                                    │
+│                                   │                                         │
+└───────────────────────────────────┼─────────────────────────────────────────┘
+                                    │ WebSocket (Socket.io)
+                                    │
+┌───────────────────────────────────┼─────────────────────────────────────────┐
+│                              Backend (NestJS)                               │
+│                                   │                                         │
+│                          ┌────────┴────────┐                                │
+│                          │ TerminalGateway │                                │
+│                          └────────┬────────┘                                │
+│                                   │                                         │
+│                     ┌─────────────┴─────────────┐                           │
+│                     │   SessionManagerService   │                           │
+│                     └─────────────┬─────────────┘                           │
+│                                   │                                         │
+│              ┌────────────────────┼────────────────────┐                    │
+│              │                    │                    │                    │
+│        ┌─────┴─────┐        ┌─────┴─────┐        ┌─────┴─────┐              │
+│        │ PG Conn A │        │ PG Conn B │        │ PG Conn C │              │
+│        └─────┬─────┘        └─────┬─────┘        └─────┬─────┘              │
+│              │                    │                    │                    │
+└──────────────┼────────────────────┼────────────────────┼────────────────────┘
+               │                    │                    │
+               └────────────────────┼────────────────────┘
+                                    │
+                          ┌─────────┴─────────┐
+                          │   PostgreSQL 16   │
+                          └───────────────────┘
+```
 
-- Two SQL terminals (Monaco Editor)
-- Each terminal = separate database session
-- WebSocket connection for real-time results
-- SQL presets toolbar with educational tooltips
-- Activity log per terminal
-- Committed Data panel with change highlighting
+## Key Design Decisions
 
-### Backend (apps/backend)
+### One WebSocket, Multiple Database Sessions
 
-- WebSocket gateway for terminal sessions
-- Each session maintains its own pg connection
-- Explicit transaction management (BEGIN/COMMIT/ROLLBACK)
-- Autocommit for queries outside explicit transactions
-- Broadcast committed data to all clients after changes
+**Problem:** Each terminal needs its own PostgreSQL connection to demonstrate isolation between transactions.
 
-## Key Concepts
+**Rejected approach:** One WebSocket per terminal — complex connection management, harder to broadcast.
 
-| Isolation Level  | Dirty Read | Non-repeatable Read | Phantom Read |
-| ---------------- | ---------- | ------------------- | ------------ |
-| Read Uncommitted | Possible   | Possible            | Possible     |
-| Read Committed   | No         | Possible            | Possible     |
-| Repeatable Read  | No         | No                  | Possible\*   |
-| Serializable     | No         | No                  | No           |
+**Chosen approach:** Single WebSocket connection, multiple PG sessions managed server-side. Each request includes `sessionId` to route to correct connection.
 
-\*PostgreSQL's Repeatable Read actually prevents phantoms too
+**Benefits:**
+
+- Simpler client code
+- Easy broadcast to all terminals (committed data updates)
+- Server controls session lifecycle
+
+### Why Separate PG Connections (not connection pool)?
+
+Connection pools share connections, reset state between uses. We need:
+
+- Persistent transaction state per terminal
+- Different isolation levels per session
+- Ability to hold locks across multiple queries
+
+Each terminal gets a dedicated `pg.Client` that lives for the browser session lifetime.
+
+### Autocommit vs Explicit Transactions
+
+**Behavior:**
+
+- Query without `BEGIN` → autocommit (immediately visible to others)
+- `BEGIN` → starts transaction with selected isolation level
+- `COMMIT`/`ROLLBACK` → ends transaction
+
+This matches real PostgreSQL behavior and helps users understand the difference.
+
+### Broadcast on Commit
+
+When any session commits (or autocommits), server broadcasts updated table data to ALL clients. This lets users see how their changes become visible to others.
+
+```
+Terminal 1: UPDATE accounts SET balance = 500 WHERE id = 1;
+            COMMIT;
+                │
+                ▼
+Backend: broadcastCommittedData('accounts')
+                │
+                ▼
+All terminals: DatabaseState panel updates with highlighted changes
+```
+
+## Tech Stack
+
+| Layer      | Technology           | Why                                                    |
+| ---------- | -------------------- | ------------------------------------------------------ |
+| Monorepo   | pnpm workspaces      | Fast, efficient, good TypeScript support               |
+| Frontend   | React 19 + Vite      | Modern, fast HMR, good DX                              |
+| State      | Zustand              | Minimal API, stable references, granular subscriptions |
+| UI         | Shadcn/ui + Tailwind | Consistent design, easy customization                  |
+| SQL Editor | Monaco Editor        | VS Code experience, SQL syntax highlighting            |
+| Backend    | NestJS               | Structured, good WebSocket support, TypeScript native  |
+| WebSocket  | Socket.io            | Reliable, reconnection handling, room support          |
+| Database   | PostgreSQL 16        | Industry standard, best isolation level implementation |
+| DB Client  | node-postgres (pg)   | Low-level control needed for session management        |
 
 ## Project Structure
 
 ```
 isolation-levels-demo/
 ├── apps/
-│   ├── backend/              # NestJS WebSocket server
-│   │   └── src/
-│   │       ├── database/     # SessionManagerService
-│   │       └── gateway/      # TerminalGateway (WebSocket)
-│   └── frontend/             # React app
-│       └── src/
-│           ├── components/
-│           │   ├── layout/         # Header
-│           │   ├── terminal/       # TerminalPanel, SqlPresets, IsolationSelect
-│           │   └── database-state/ # DatabaseState (committed data view)
-│           └── hooks/              # useSocket, useSession, useCommittedData
+│   ├── backend/                    # NestJS WebSocket server
+│   │   ├── src/
+│   │   │   ├── database/
+│   │   │   │   └── session-manager.service.ts  # PG connection management
+│   │   │   └── gateway/
+│   │   │       └── terminal.gateway.ts         # WebSocket event handlers
+│   │   └── ARCHITECTURE.md
+│   │
+│   └── frontend/                   # React SPA
+│       ├── src/
+│       │   ├── components/         # UI components
+│       │   ├── stores/             # Zustand session store
+│       │   ├── hooks/              # React hooks
+│       │   └── data/               # Scenario definitions
+│       └── ARCHITECTURE.md         # Frontend-specific decisions
+│
 ├── packages/
-│   └── shared/               # Shared types (@isolation-demo/shared)
-├── docker-compose.yml
+│   └── shared/                     # @isolation-demo/shared
+│       └── src/
+│           ├── types.ts            # WebSocket event types
+│           ├── scenarios.ts        # Scenario type definitions
+│           └── setup-sql.ts        # Database schema
+│
+├── docker-compose.yml              # PostgreSQL container
 └── pnpm-workspace.yaml
 ```
 
-## API Design
+## WebSocket Protocol
 
-### WebSocket Events
+### Client → Server
 
-Client → Server:
+| Event                  | Payload                | Description                               |
+| ---------------------- | ---------------------- | ----------------------------------------- |
+| `session:create`       | `{ isolationLevel? }`  | Create new PG connection                  |
+| `session:execute`      | `{ sessionId, sql }`   | Execute SQL query                         |
+| `session:commit`       | `{ sessionId }`        | Commit transaction                        |
+| `session:rollback`     | `{ sessionId }`        | Rollback transaction                      |
+| `session:setIsolation` | `{ sessionId, level }` | Change isolation level (outside txn only) |
+| `setup:execute`        | `{ sql }`              | Reset database schema                     |
+| `data:getCommitted`    | `{ table }`            | Fetch current committed data              |
 
-- `session:create` → creates new pg connection with isolation level
-- `session:execute` → { sessionId, sql } — executes SQL, handles BEGIN/COMMIT/ROLLBACK
-- `session:commit` → { sessionId } — commits transaction
-- `session:rollback` → { sessionId } — rolls back transaction
-- `session:setIsolation` → { sessionId, level } — changes isolation level (only outside transaction)
-- `setup:execute` → { sql } — resets database schema
-- `data:getCommitted` → { table } — fetches current committed data
+### Server → Client
 
-Server → Client:
+| Event             | Payload                                 | Description                |
+| ----------------- | --------------------------------------- | -------------------------- |
+| `session:created` | `{ sessionId, state }`                  | Session ready              |
+| `session:result`  | `{ sessionId, result?, error?, state }` | Query result or error      |
+| `data:committed`  | `{ table, rows }`                       | Broadcast after any commit |
 
-- `session:created` → { sessionId, state }
-- `session:result` → { sessionId, result, error, state }
-- `data:committed` → { table, rows } — broadcast after commits/autocommits
+### Session State
 
-## Data Flow
+```typescript
+interface SessionState {
+  sessionId: string;
+  isolationLevel: IsolationLevel;
+  inTransaction: boolean;
+}
+
+type IsolationLevel = 'READ UNCOMMITTED' | 'READ COMMITTED' | 'REPEATABLE READ' | 'SERIALIZABLE';
+```
+
+## Data Flow Examples
+
+### Scenario: Non-Repeatable Read
 
 ```
-Terminal executes query
-        ↓
-    Gateway receives
-        ↓
-    SessionManager executes on PG connection
-        ↓
-    Returns result + updated state
-        ↓
-    If autocommit (not in transaction):
-        → Broadcast data:committed to ALL clients
-        ↓
-    DatabaseState updates for everyone
+Terminal 1                    Terminal 2                    Database
+    │                             │                            │
+    │ BEGIN (READ COMMITTED)      │                            │
+    ├────────────────────────────►│                            │
+    │                             │                            │
+    │ SELECT balance WHERE id=1   │                            │
+    ├────────────────────────────►│◄───────────────────────────┤
+    │ ◄─── returns 1000           │                            │
+    │                             │                            │
+    │                             │ UPDATE balance = 500       │
+    │                             ├───────────────────────────►│
+    │                             │ COMMIT                     │
+    │                             ├───────────────────────────►│
+    │                             │                            │
+    │ SELECT balance WHERE id=1   │                            │
+    ├────────────────────────────►│◄───────────────────────────┤
+    │ ◄─── returns 500 (changed!) │                            │
+    │                             │                            │
+```
+
+### Scenario: Deadlock Detection
+
+```
+Terminal 1                    Terminal 2                    PostgreSQL
+    │                             │                            │
+    │ BEGIN                       │ BEGIN                      │
+    │ UPDATE WHERE id=1           │ UPDATE WHERE id=2          │
+    │ (holds lock on row 1)       │ (holds lock on row 2)      │
+    │                             │                            │
+    │ UPDATE WHERE id=2           │                            │
+    │ (waits for row 2)───────────┼───────────────────────────►│
+    │                             │                            │
+    │                             │ UPDATE WHERE id=1          │
+    │◄────────────────────────────┼──(waits for row 1)         │
+    │                             │                            │
+    │                             │        DEADLOCK DETECTED   │
+    │                             │◄───────────────────────────┤
+    │                             │ ERROR: deadlock, txn abort │
+    │                             │                            │
+    │ (lock acquired, continues)  │                            │
 ```
 
 ## Conventions
 
-- kebab-case for files
-- One component/class per file
-- Colocate tests: `*.spec.ts` next to source
-- Types imported with `import type` when type-only
+- **File naming:** kebab-case (`session-store.ts`, `terminal-panel.tsx`)
+- **Components:** One per file, named export matches filename
+- **Tests:** Colocated (`*.spec.ts` next to source)
+- **Types:** Use `import type` for type-only imports
+- **Shared types:** All WebSocket types in `@isolation-demo/shared`
 
-## Commands
+## Development
 
-- `pnpm dev` — start all
-- `docker-compose up -d` — start postgres
-- `pnpm dev:backend` — backend only
-- `pnpm dev:frontend` — frontend only
+```bash
+# Start PostgreSQL
+docker-compose up -d
 
-## Roadmap
+# Install dependencies
+pnpm install
 
-### v1.0 (current)
+# Start all (backend + frontend)
+pnpm dev
 
-- [x] Two parallel SQL terminals
-- [x] Isolation level selection with descriptions
-- [x] Real-time committed state view with change highlighting
-- [x] SQL presets with educational tooltips
-- [x] Activity log per terminal
-- [ ] Explanation panel
-- [ ] Preset scenarios (step-by-step demos)
+# Or separately
+pnpm dev:backend    # http://localhost:3000
+pnpm dev:frontend   # http://localhost:5173
+```
 
-### v2.0
+## Detailed Documentation
 
-- Uncommitted data visualization (per-session broadcast)
-- Lock monitoring (`pg_locks`)
-- Deadlock detection and visualization
-- EXPLAIN ANALYZE visualization
+- [Frontend Architecture](./apps/frontend/ARCHITECTURE.md) — React components, Zustand store, state management decisions
+- Backend Architecture — (planned) Session management, WebSocket gateway details
