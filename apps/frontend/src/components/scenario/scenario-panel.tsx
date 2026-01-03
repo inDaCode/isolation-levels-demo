@@ -4,10 +4,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Copy,
+  Play,
   CheckCircle2,
   AlertTriangle,
   Lightbulb,
 } from 'lucide-react';
+import { useSessionStore, type TerminalId } from '@/stores/session-store';
 import type { Scenario } from '@isolation-demo/shared';
 
 interface ScenarioPanelProps {
@@ -16,8 +18,6 @@ interface ScenarioPanelProps {
   isConclusion: boolean;
   onPrev: () => void;
   onNext: () => void;
-  onCopyToTerminal: (terminal: 1 | 2 | 3, sql: string) => void;
-  onRunInTerminal: (terminal: 1 | 2 | 3, sql: string) => void;
 }
 
 export function ScenarioPanel({
@@ -26,12 +26,23 @@ export function ScenarioPanel({
   isConclusion,
   onPrev,
   onNext,
-  onCopyToTerminal,
 }: ScenarioPanelProps) {
+  const setSql = useSessionStore((s) => s.setSql);
+  const execute = useSessionStore((s) => s.execute);
+
   const totalSteps = scenario.steps.length;
   const step = scenario.steps[currentStep];
   const isFirstStep = currentStep === 0;
   const isLastStep = currentStep === totalSteps - 1;
+
+  const handleCopy = (terminal: TerminalId, sql: string) => {
+    setSql(terminal, sql);
+  };
+
+  const handleRun = (terminal: TerminalId, sql: string) => {
+    setSql(terminal, sql);
+    execute(terminal);
+  };
 
   if (isConclusion) {
     return (
@@ -72,7 +83,6 @@ export function ScenarioPanel({
       <div className="flex items-start gap-3">
         <Lightbulb className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
         <div className="flex-1 space-y-3">
-          {/* Header */}
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-blue-400">
               {scenario.title}
@@ -82,10 +92,8 @@ export function ScenarioPanel({
             </h3>
           </div>
 
-          {/* Explanation */}
           <p className="text-sm text-zinc-300">{step.explanation}</p>
 
-          {/* SQL to execute */}
           <div className="space-y-2">
             <div className="flex items-center gap-2 text-xs text-zinc-400">
               <span>👉 Execute in Terminal {step.terminal}:</span>
@@ -97,15 +105,22 @@ export function ScenarioPanel({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => onCopyToTerminal(step.terminal, step.sql)}
+                onClick={() => handleCopy(step.terminal as TerminalId, step.sql)}
                 title="Copy to terminal"
               >
                 <Copy className="w-4 h-4" />
               </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => handleRun(step.terminal as TerminalId, step.sql)}
+                title="Run in terminal"
+              >
+                <Play className="w-4 h-4" />
+              </Button>
             </div>
           </div>
 
-          {/* Expectation */}
           {step.expectation && (
             <div className="flex items-start gap-2 px-3 py-2 bg-amber-950/30 border border-amber-900/50 rounded">
               <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
@@ -113,7 +128,6 @@ export function ScenarioPanel({
             </div>
           )}
 
-          {/* Navigation */}
           <div className="flex items-center justify-between pt-2">
             <Button variant="ghost" size="sm" onClick={onPrev} disabled={isFirstStep}>
               <ChevronLeft className="w-4 h-4 mr-1" />

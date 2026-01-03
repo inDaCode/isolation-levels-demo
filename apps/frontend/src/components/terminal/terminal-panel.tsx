@@ -1,70 +1,46 @@
-import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef } from 'react';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import type { editor } from 'monaco-editor';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, Play } from 'lucide-react';
-import { useSession } from '@/hooks/use-session';
+import { useSessionStore, selectSession, type TerminalId } from '@/stores/session-store';
 import { QueryResultView } from './query-result';
 import { SqlPresets } from './sql-presets';
 import { IsolationSelect } from './isolation-select';
 import type { IsolationLevel } from '@isolation-demo/shared';
 
-export interface TerminalHandle {
-  setSql: (sql: string) => void;
-  execute: () => void;
-  setIsolationLevel: (level: IsolationLevel) => void;
-}
-
 interface TerminalPanelProps {
-  terminalId: number;
+  terminalId: TerminalId;
   defaultIsolationLevel?: IsolationLevel;
 }
 
-export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(function TerminalPanel(
-  { terminalId, defaultIsolationLevel = 'READ COMMITTED' },
-  ref,
-) {
+export function TerminalPanel({
+  terminalId,
+  defaultIsolationLevel = 'READ COMMITTED',
+}: TerminalPanelProps) {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const initializedRef = useRef(false);
-  const [sql, setSql] = useState('SELECT * FROM accounts;');
-  const session = useSession();
 
-  const executeRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    executeRef.current = () => {
-      if (sql.trim()) {
-        session.execute(sql.trim());
-      }
-    };
-  }, [sql, session]);
+  const session = useSessionStore(selectSession(terminalId));
+  const setSql = useSessionStore((s) => s.setSql);
+  const createSession = useSessionStore((s) => s.createSession);
+  const execute = useSessionStore((s) => s.execute);
+  const commit = useSessionStore((s) => s.commit);
+  const rollback = useSessionStore((s) => s.rollback);
+  const setIsolationLevel = useSessionStore((s) => s.setIsolationLevel);
 
   useEffect(() => {
     if (!initializedRef.current) {
       initializedRef.current = true;
-      session.create(defaultIsolationLevel);
+      createSession(terminalId, defaultIsolationLevel);
     }
-  }, [session, defaultIsolationLevel]);
+  }, [terminalId, defaultIsolationLevel, createSession]);
 
-  // Expose methods to parent
-  useImperativeHandle(
-    ref,
-    () => ({
-      setSql: (newSql: string) => {
-        setSql(newSql);
-        editorRef.current?.focus();
-      },
-      execute: () => {
-        executeRef.current();
-      },
-      setIsolationLevel: (level: IsolationLevel) => {
-        session.setIsolationLevel(level);
-      },
-    }),
-    [session],
-  );
+  const handleExecute = () => {
+    execute(terminalId);
+  };
 
   const handleEditorMount: OnMount = (editor, monaco) => {
     editorRef.current = editor;
@@ -73,19 +49,19 @@ export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(func
       id: 'run-query',
       label: 'Run Query',
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
-      run: () => executeRef.current(),
+      run: handleExecute,
     });
   };
 
   const handlePresetSelect = (presetSql: string) => {
-    setSql(presetSql);
+    setSql(terminalId, presetSql);
     editorRef.current?.focus();
   };
 
   const inTransaction = session.state?.inTransaction ?? false;
   const statusColor = inTransaction ? 'bg-yellow-500' : 'bg-green-500';
   const statusText = inTransaction ? 'In Transaction' : 'Idle';
-  const canRun = !session.isLoading && session.state && sql.trim();
+  const canRun = !session.isLoading && session.state && session.sql.trim();
 
   const reversedLog = [...session.log].reverse().slice(0, 3);
   const showResult = session.lastResult && !session.lastWasTransactionCommand;
@@ -107,7 +83,7 @@ export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(func
         </div>
         <IsolationSelect
           value={session.state?.isolationLevel ?? defaultIsolationLevel}
-          onChange={(level) => session.setIsolationLevel(level)}
+          onChange={(level) => setIsolationLevel(terminalId, level)}
           disabled={inTransaction}
         />
       </div>
@@ -124,7 +100,10 @@ export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(func
             <Button
               variant={inTransaction ? 'outline' : 'secondary'}
               size="sm"
-              onClick={() => session.execute('BEGIN')}
+              onClick={() => {
+                setSql(terminalId, 'BEGIN');
+                execute(terminalId);
+              }}
               disabled={session.isLoading || !session.state || inTransaction}
               className="h-7 text-xs font-mono"
             >
@@ -136,7 +115,7 @@ export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(func
             <Button
               variant="outline"
               size="sm"
-              onClick={() => session.commit()}
+              onClick={() => commit(terminalId)}
               disabled={session.isLoading || !inTransaction}
               className="h-7 text-xs font-mono"
             >
@@ -145,7 +124,7 @@ export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(func
             <Button
               variant="outline"
               size="sm"
-              onClick={() => session.rollback()}
+              onClick={() => rollback(terminalId)}
               disabled={session.isLoading || !inTransaction}
               className="h-7 text-xs font-mono"
             >
@@ -157,20 +136,18 @@ export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(func
 
       {/* Presets + Editor + Run */}
       <div className="flex gap-3 shrink-0 items-start">
-        {/* Presets слева */}
         <div className="flex flex-col gap-1.5 shrink-0">
           <SqlPresets onSelect={handlePresetSelect} disabled={!session.state} />
         </div>
 
-        {/* Editor по центру */}
         <div className="flex-1 flex flex-col gap-1.5">
           <span className="text-xs text-zinc-500">Query</span>
           <div className="h-[160px] border border-zinc-800 rounded overflow-hidden">
             <Editor
               height="100%"
               defaultLanguage="sql"
-              value={sql}
-              onChange={(value) => setSql(value ?? '')}
+              value={session.sql}
+              onChange={(value) => setSql(terminalId, value ?? '')}
               onMount={handleEditorMount}
               theme="vs-dark"
               options={{
@@ -187,13 +164,12 @@ export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(func
           </div>
         </div>
 
-        {/* Run справа */}
         <div className="flex flex-col gap-1.5 shrink-0">
           <span className="text-xs text-zinc-500">Run</span>
           <Button
             variant="secondary"
             size="sm"
-            onClick={() => executeRef.current()}
+            onClick={handleExecute}
             disabled={!canRun}
             className={`h-8 px-3 ${canRun ? 'text-green-400 hover:text-green-300' : ''}`}
           >
@@ -244,4 +220,4 @@ export const TerminalPanel = forwardRef<TerminalHandle, TerminalPanelProps>(func
       </div>
     </Card>
   );
-});
+}
