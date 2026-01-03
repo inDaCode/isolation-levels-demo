@@ -14,21 +14,27 @@
 
 ### Frontend (React + Vite)
 
-- Два терминала с Monaco Editor
+- **3 терминала** с Monaco Editor (для демонстрации chain deadlock и других сценариев)
 - Выбор isolation level с описаниями (dropdown с пояснениями)
-- SQL presets toolbar (SELECT, UPDATE, LOCK категории)
+- SQL presets toolbar (SELECT, UPDATE, LOCK категории) — вертикально слева от редактора
 - Выполнение SQL, BEGIN, Commit, Rollback
-- Activity log в каждом терминале (с timestamp, цветовая индикация)
+- Activity log в каждом терминале (последние 3 записи, с timestamp, цветовая индикация)
 - Loading state (спиннер, readonly editor во время выполнения)
 - Ctrl+Enter для выполнения запроса
-- Панель Committed Data с подсветкой изменений:
-  - Жёлтая подсветка — изменённые ячейки
-  - Зелёная подсветка — новые строки
-- Auto-setup схемы при загрузке + кнопка Reset DB
+- Панель Committed Data с подсветкой изменений + кнопка Reset DB
+- **Scenario Mode:**
+  - Выбор сценария из dropdown в Header
+  - ScenarioPanel с пошаговыми инструкциями
+  - Кнопка "Copy to Terminal" для копирования SQL
+  - Навигация по шагам (Back / Next)
+  - Conclusion с описанием проблемы и решения
+- **ExplanationPanel** в режиме Sandbox (welcome message)
+- `forwardRef` для управления терминалами из сценариев
 
 ### Shared (TypeScript types)
 
 - Типы для WebSocket событий
+- Типы для сценариев (`Scenario`, `ScenarioStep`)
 - `SETUP_SQL` — единый источник схемы БД
 - ESM формат, используется обоими приложениями
 
@@ -37,21 +43,24 @@
 ```
 isolation-levels-demo/
 ├── apps/
-│   ├── backend/           # NestJS, WebSocket, node-postgres
+│   ├── backend/              # NestJS, WebSocket, node-postgres
 │   │   └── src/
-│   │       ├── database/  # SessionManagerService
-│   │       └── gateway/   # TerminalGateway
-│   └── frontend/          # React, Vite, Tailwind, shadcn/ui
+│   │       ├── database/     # SessionManagerService
+│   │       └── gateway/      # TerminalGateway
+│   └── frontend/             # React, Vite, Tailwind, shadcn/ui
 │       └── src/
 │           ├── components/
-│           │   ├── layout/        # Header
-│           │   ├── terminal/      # TerminalPanel, QueryResultView, SqlPresets, IsolationSelect
-│           │   └── database-state/# DatabaseState
-│           ├── hooks/             # useSocket, useSession, useDatabaseSetup, useCommittedData
-│           └── lib/               # socket-client
+│           │   ├── layout/         # Header
+│           │   ├── terminal/       # TerminalPanel, QueryResultView, SqlPresets, IsolationSelect
+│           │   ├── database-state/ # DatabaseState
+│           │   ├── explanation/    # ExplanationPanel
+│           │   └── scenario/       # ScenarioSelect, ScenarioPanel
+│           ├── data/               # scenarios.ts (данные сценариев)
+│           ├── hooks/              # useSocket, useSession, useDatabaseSetup, useCommittedData, useScenario
+│           └── lib/                # socket-client
 ├── packages/
-│   └── shared/            # @isolation-demo/shared — типы, SETUP_SQL
-└── docker-compose.yml     # PostgreSQL 16
+│   └── shared/               # @isolation-demo/shared — типы, SETUP_SQL
+└── docker-compose.yml        # PostgreSQL 16
 ```
 
 ## Как запустить
@@ -62,10 +71,21 @@ pnpm install
 pnpm dev                    # Backend :3000, Frontend :5173
 ```
 
+## Сценарии (реализованы)
+
+| Сценарий            | Терминалов | Сложность    | Описание                                           |
+| ------------------- | ---------- | ------------ | -------------------------------------------------- |
+| Non-repeatable Read | 2          | Basic        | SELECT возвращает разные данные в одной транзакции |
+| Deadlock            | 2          | Intermediate | Взаимная блокировка двух транзакций                |
+
 ## Что осталось сделать (по приоритету)
 
-1. **Explanation panel** — контекстные подсказки что происходит
-2. **Scenarios режим** — пошаговые демонстрации isolation phenomena
+1. **Исправить "Run in Terminal"** — автоматическое выполнение из сценария не работает
+2. **Добавить больше сценариев:**
+   - Phantom Read
+   - Lost Update + защита с FOR UPDATE
+   - Chain Deadlock (3 терминала)
+   - Lock Queue (3 терминала)
 3. **Тесты** — unit для SessionManagerService, integration для gateway
 4. **CI** — GitHub Actions (lint + test + build)
 
@@ -76,17 +96,19 @@ pnpm dev                    # Backend :3000, Frontend :5173
 - **Auto-reset при старте** — пользователь сразу видит данные
 - **Committed Data обновляется автоматически** — broadcast после commit и autocommit
 - **Явные транзакции** — BEGIN обязателен для старта транзакции, без него запросы в autocommit
-- **Activity log в хуке** — логирование инкапсулировано в useSession, не в компоненте
+- **Activity log в хуке** — логирование инкапсулировано в useSession
+- **Типы сценариев в shared, данные на фронте** — правильное разделение для монорепы
+- **3 терминала** — для демонстрации chain deadlock и lock queue
+- **Guided scenarios** — пользователь выполняет шаги вручную, не автоматизация
 
 ## Отложенные идеи (v2)
 
-- **Uncommitted data view** — показывать незакоммиченные изменения в общем окне
-  - Требует broadcast per-session данных через WebSocket
-  - Архитектурно правильнее чем props drilling
+- **Uncommitted data view** — показывать незакоммиченные изменения
 - **Lock visualization** — показывать ожидание блокировок через pg_locks
+- **Auto-execute в сценариях** — кнопка "Run in Terminal" (требует отладки)
 
 ## Известные ограничения
 
 - Нет reconnect логики при потере сессии (рефреш страницы)
 - Нет валидации SQL на фронте
-- Scenarios ещё не реализованы
+- "Run in Terminal" из сценария временно отключён
