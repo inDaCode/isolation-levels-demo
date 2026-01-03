@@ -49,8 +49,6 @@ interface IsolationSelectProps {
 }
 
 export function IsolationSelect({ value, onChange, disabled }: IsolationSelectProps) {
-  const currentOption = ISOLATION_OPTIONS.find((opt) => opt.level === value);
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>

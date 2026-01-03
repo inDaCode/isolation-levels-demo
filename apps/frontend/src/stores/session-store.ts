@@ -38,6 +38,7 @@ interface SessionStore {
   setSql: (terminalId: TerminalId, sql: string) => void;
   createSession: (terminalId: TerminalId, isolationLevel?: IsolationLevel) => Promise<void>;
   execute: (terminalId: TerminalId) => Promise<void>;
+  executeWithSql: (terminalId: TerminalId, sql: string) => Promise<void>;
   commit: (terminalId: TerminalId) => Promise<void>;
   rollback: (terminalId: TerminalId) => Promise<void>;
   setIsolationLevel: (terminalId: TerminalId, level: IsolationLevel) => Promise<void>;
@@ -86,11 +87,17 @@ function formatQueryLog(sql: string, result: QueryResult): string {
   return `${preview} → ${result.rowCount} rows, ${result.duration}ms`;
 }
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  return 'Unknown error';
+}
+
 // --- Store ---
 
-let logId = 0;
-
 export const useSessionStore = create<SessionStore>((set, get) => {
+  let logId = 0;
+
   const updateSession = (terminalId: TerminalId, updates: Partial<TerminalSession>) => {
     set((state) => ({
       sessions: {
@@ -129,9 +136,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         });
         updateSession(terminalId, { state: response.state, isLoading: false });
         addLog(terminalId, 'Session created', 'info');
-      } catch {
+      } catch (error) {
         updateSession(terminalId, { isLoading: false });
-        addLog(terminalId, 'Failed to create session', 'error');
+        addLog(terminalId, getErrorMessage(error), 'error');
       }
     },
 
@@ -185,10 +192,15 @@ export const useSessionStore = create<SessionStore>((set, get) => {
             addLog(terminalId, formatQueryLog(sql, response.result), 'info');
           }
         }
-      } catch {
+      } catch (error) {
         updateSession(terminalId, { isLoading: false });
-        addLog(terminalId, 'Execution failed', 'error');
+        addLog(terminalId, getErrorMessage(error), 'error');
       }
+    },
+
+    executeWithSql: async (terminalId, sql) => {
+      get().setSql(terminalId, sql);
+      return get().execute(terminalId);
     },
 
     commit: async (terminalId) => {
@@ -217,9 +229,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           });
           addLog(terminalId, response.error, 'error');
         }
-      } catch {
+      } catch (error) {
         updateSession(terminalId, { isLoading: false });
-        addLog(terminalId, 'Commit failed', 'error');
+        addLog(terminalId, getErrorMessage(error), 'error');
       }
     },
 
@@ -249,9 +261,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           });
           addLog(terminalId, response.error, 'error');
         }
-      } catch {
+      } catch (error) {
         updateSession(terminalId, { isLoading: false });
-        addLog(terminalId, 'Rollback failed', 'error');
+        addLog(terminalId, getErrorMessage(error), 'error');
       }
     },
 
@@ -272,8 +284,8 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           updateSession(terminalId, { lastError: { message: response.error } });
           addLog(terminalId, response.error, 'error');
         }
-      } catch {
-        addLog(terminalId, 'Failed to set isolation level', 'error');
+      } catch (error) {
+        addLog(terminalId, getErrorMessage(error), 'error');
       }
     },
   };

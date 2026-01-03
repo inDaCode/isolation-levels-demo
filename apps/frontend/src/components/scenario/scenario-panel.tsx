@@ -10,7 +10,7 @@ import {
   Lightbulb,
 } from 'lucide-react';
 import { useSessionStore, type TerminalId } from '@/stores/session-store';
-import type { Scenario } from '@isolation-demo/shared';
+import type { Scenario } from '@/data/scenarios';
 
 interface ScenarioPanelProps {
   scenario: Scenario;
@@ -28,60 +28,62 @@ export function ScenarioPanel({
   onNext,
 }: ScenarioPanelProps) {
   const setSql = useSessionStore((s) => s.setSql);
-  const execute = useSessionStore((s) => s.execute);
+  const executeWithSql = useSessionStore((s) => s.executeWithSql);
 
   const totalSteps = scenario.steps.length;
   const step = scenario.steps[currentStep];
   const isFirstStep = currentStep === 0;
   const isLastStep = currentStep === totalSteps - 1;
 
-  const handleCopy = (terminal: TerminalId, sql: string) => {
+  const handleInsertToTerminal = (terminal: TerminalId, sql: string) => {
     setSql(terminal, sql);
   };
 
-  const handleRun = (terminal: TerminalId, sql: string) => {
-    setSql(terminal, sql);
-    execute(terminal);
+  const handleRunInTerminal = (terminal: TerminalId, sql: string) => {
+    executeWithSql(terminal, sql);
   };
 
   if (isConclusion) {
     return (
-      <Card className="p-4 shrink-0 border-green-900/50 bg-green-950/20">
-        <div className="flex items-start gap-3">
-          <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0 mt-0.5" />
-          <div className="flex-1 space-y-3">
-            <div>
-              <h3 className="font-semibold text-green-400 mb-1">Scenario Complete!</h3>
-              <p className="text-sm text-zinc-300">{scenario.title}</p>
-            </div>
-
-            <div className="space-y-2">
+      <Card className="p-4 h-full border-green-900/50 bg-green-950/20 overflow-y-auto">
+        <div className="flex flex-col h-full">
+          <div className="flex items-start gap-3 flex-1">
+            <CheckCircle2 className="w-5 h-5 text-green-500 shrink-0 mt-0.5" />
+            <div className="flex-1 space-y-3">
               <div>
-                <span className="text-xs font-medium text-zinc-400">Problem:</span>
-                <p className="text-sm text-zinc-300">{scenario.conclusion.problem}</p>
+                <h3 className="font-semibold text-green-400 mb-1">Scenario Complete!</h3>
+                <p className="text-sm text-zinc-300">{scenario.title}</p>
               </div>
-              <div>
-                <span className="text-xs font-medium text-zinc-400">Solution:</span>
-                <p className="text-sm text-zinc-300">{scenario.conclusion.solution}</p>
-              </div>
-            </div>
 
-            <div className="flex items-center justify-between pt-2">
-              <Button variant="ghost" size="sm" onClick={onPrev}>
-                <ChevronLeft className="w-4 h-4 mr-1" />
-                Back to steps
-              </Button>
+              <div className="space-y-2">
+                <div>
+                  <span className="text-xs font-medium text-zinc-400">Problem:</span>
+                  <p className="text-sm text-zinc-300">{scenario.conclusion.problem}</p>
+                </div>
+                <div>
+                  <span className="text-xs font-medium text-zinc-400">Solution:</span>
+                  <p className="text-sm text-zinc-300">{scenario.conclusion.solution}</p>
+                </div>
+              </div>
             </div>
+          </div>
+
+          <div className="flex items-center justify-between pt-3 border-t border-green-900/30 mt-3">
+            <Button variant="ghost" size="sm" onClick={onPrev}>
+              <ChevronLeft className="w-4 h-4 mr-1" />
+              Back to steps
+            </Button>
           </div>
         </div>
       </Card>
     );
   }
 
+  const terminalId = step.terminal as TerminalId;
+
   return (
-    <Card className="p-4 shrink-0 border-blue-900/50 bg-blue-950/20">
-      <div className="flex items-start gap-3">
-        <Lightbulb className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+    <Card className="p-4 h-full border-blue-900/50 bg-blue-950/20 overflow-y-auto">
+      <div className="flex flex-col h-full">
         <div className="flex-1 space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold text-blue-400">
@@ -105,7 +107,7 @@ export function ScenarioPanel({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => handleCopy(step.terminal as TerminalId, step.sql)}
+                onClick={() => handleInsertToTerminal(terminalId, step.sql)}
                 title="Copy to terminal"
               >
                 <Copy className="w-4 h-4" />
@@ -113,7 +115,7 @@ export function ScenarioPanel({
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => handleRun(step.terminal as TerminalId, step.sql)}
+                onClick={() => handleRunInTerminal(terminalId, step.sql)}
                 title="Run in terminal"
               >
                 <Play className="w-4 h-4" />
@@ -127,17 +129,17 @@ export function ScenarioPanel({
               <p className="text-sm text-amber-200">{step.expectation}</p>
             </div>
           )}
+        </div>
 
-          <div className="flex items-center justify-between pt-2">
-            <Button variant="ghost" size="sm" onClick={onPrev} disabled={isFirstStep}>
-              <ChevronLeft className="w-4 h-4 mr-1" />
-              Back
-            </Button>
-            <Button variant="secondary" size="sm" onClick={onNext}>
-              {isLastStep ? 'See conclusion' : 'Done, next'}
-              <ChevronRight className="w-4 h-4 ml-1" />
-            </Button>
-          </div>
+        <div className="flex items-center justify-between pt-3 border-t border-blue-900/30 mt-3">
+          <Button variant="ghost" size="sm" onClick={onPrev} disabled={isFirstStep}>
+            <ChevronLeft className="w-4 h-4 mr-1" />
+            Back
+          </Button>
+          <Button variant="secondary" size="sm" onClick={onNext}>
+            {isLastStep ? 'See conclusion' : 'Done, next'}
+            <ChevronRight className="w-4 h-4 ml-1" />
+          </Button>
         </div>
       </div>
     </Card>

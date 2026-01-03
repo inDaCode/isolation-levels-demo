@@ -7,14 +7,19 @@ interface CommittedData {
   products: Record<string, unknown>[];
 }
 
+type TableName = keyof CommittedData;
+
 // { rowId: Set<columnName> }
 export type TableChanges = Record<string, Set<string>>;
-type ChangedCells = Partial<Record<keyof CommittedData, TableChanges>>;
+type ChangedCells = Partial<Record<TableName, TableChanges>>;
 
-const HIGHLIGHT_DURATION = 2000;
+const HIGHLIGHT_DURATION_MS = 2000;
 
 function getRowId(row: Record<string, unknown>): string {
-  return String(row['id'] ?? JSON.stringify(row));
+  if ('id' in row && row.id != null) {
+    return String(row.id);
+  }
+  return JSON.stringify(row);
 }
 
 function detectChanges(
@@ -29,14 +34,16 @@ function detectChanges(
     const prev = prevMap.get(id);
 
     if (!prev) {
-      // New row
+      // New row — all columns changed
       changes[id] = new Set(Object.keys(row));
     } else {
-      // Check changed columns
-      const changed = Object.keys(row).filter(
+      // Check each column
+      const changedCols = Object.keys(row).filter(
         (col) => JSON.stringify(prev[col]) !== JSON.stringify(row[col]),
       );
-      if (changed.length) changes[id] = new Set(changed);
+      if (changedCols.length > 0) {
+        changes[id] = new Set(changedCols);
+      }
     }
   }
 
@@ -51,46 +58,57 @@ interface UseCommittedDataReturn {
 export function useCommittedData(): UseCommittedDataReturn {
   const [data, setData] = useState<CommittedData>({ accounts: [], products: [] });
   const [changedCells, setChangedCells] = useState<ChangedCells>({});
-  const prevRef = useRef<CommittedData>({ accounts: [], products: [] });
-  const timerRef = useRef<number | null>(null);
+  const prevDataRef = useRef<CommittedData>({ accounts: [], products: [] });
+  const highlightTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const clearHighlight = () => {
-      if (timerRef.current) window.clearTimeout(timerRef.current);
-      timerRef.current = window.setTimeout(() => setChangedCells({}), HIGHLIGHT_DURATION);
+    const scheduleHighlightClear = () => {
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+      highlightTimerRef.current = window.setTimeout(() => {
+        setChangedCells({});
+      }, HIGHLIGHT_DURATION_MS);
     };
 
-    const handleUpdate = (event: CommittedDataEvent) => {
-      const table = event.table as keyof CommittedData;
-      const changes = detectChanges(prevRef.current[table], event.rows);
+    const handleDataCommitted = (event: CommittedDataEvent) => {
+      const table = event.table as TableName;
 
-      prevRef.current = { ...prevRef.current, [table]: event.rows };
-      setData(prevRef.current);
+      const changes = detectChanges(prevDataRef.current[table], event.rows);
 
-      if (Object.keys(changes).length) {
+      prevDataRef.current = { ...prevDataRef.current, [table]: event.rows };
+      setData(prevDataRef.current);
+
+      if (Object.keys(changes).length > 0) {
         setChangedCells((prev) => ({ ...prev, [table]: changes }));
-        clearHighlight();
+        scheduleHighlightClear();
       }
     };
 
-    socket.on(WS_EVENTS.DATA_COMMITTED, handleUpdate);
+    socket.on(WS_EVENTS.DATA_COMMITTED, handleDataCommitted);
 
-    // Initial fetch
+    // Fetch initial data
     Promise.all([
       socket.emitWithAck(WS_EVENTS.DATA_GET_COMMITTED, { table: 'accounts' }),
       socket.emitWithAck(WS_EVENTS.DATA_GET_COMMITTED, { table: 'products' }),
-    ]).then(([acc, prod]) => {
-      const initial = {
-        accounts: (acc as CommittedDataEvent).rows,
-        products: (prod as CommittedDataEvent).rows,
-      };
-      prevRef.current = initial;
+    ]).then((responses) => {
+      const [accountsRes, productsRes] = responses as CommittedDataEvent[];
+      const initial = [
+        { table: 'accounts' as TableName, rows: accountsRes.rows },
+        { table: 'products' as TableName, rows: productsRes.rows },
+      ].reduce((acc, { table, rows }) => ({ ...acc, [table]: rows }), {
+        accounts: [],
+        products: [],
+      } as CommittedData);
+      prevDataRef.current = initial;
       setData(initial);
     });
 
     return () => {
-      socket.off(WS_EVENTS.DATA_COMMITTED, handleUpdate);
-      if (timerRef.current) window.clearTimeout(timerRef.current);
+      socket.off(WS_EVENTS.DATA_COMMITTED, handleDataCommitted);
+      if (highlightTimerRef.current !== null) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
     };
   }, []);
 

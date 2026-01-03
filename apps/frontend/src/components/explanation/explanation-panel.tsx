@@ -1,29 +1,59 @@
 import { Card } from '@/components/ui/card';
-import { Lightbulb } from 'lucide-react';
+import { Database, Terminal, GitBranch, FlaskConical } from 'lucide-react';
 
 export function ExplanationPanel() {
-  // TODO: В следующем шаге добавим useExplanation hook
-  // который будет генерировать контент на основе состояния терминалов
-
   return (
-    <Card className="p-4 shrink-0 border-amber-900/50 bg-amber-950/20">
-      <div className="flex gap-3">
-        <Lightbulb className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
-        <div className="space-y-1">
-          <p className="text-sm text-zinc-200">
-            <strong>Welcome!</strong> This is an interactive demo of PostgreSQL transaction
-            isolation levels.
-          </p>
+    <Card className="p-4 shrink-0 border-zinc-800 bg-zinc-900/50">
+      <div className="flex items-start justify-between gap-6">
+        <div className="flex-1">
+          <h2 className="text-lg font-semibold mb-1">PostgreSQL Isolation Levels Demo</h2>
           <p className="text-sm text-zinc-400">
-            Try running{' '}
-            <code className="px-1.5 py-0.5 bg-zinc-800 rounded text-xs">
-              SELECT * FROM accounts
-            </code>{' '}
-            in Terminal 1, then start a transaction in Terminal 2 with a different isolation level
-            and observe how they see data differently.
+            Interactive tool for learning transaction isolation. Experiment freely or select a
+            guided scenario from the menu.
           </p>
+        </div>
+
+        <div className="flex gap-4">
+          <InfoBadge
+            icon={<Database className="w-4 h-4 text-blue-400" />}
+            title="PostgreSQL 16"
+            subtitle="with SSI"
+          />
+          <InfoBadge
+            icon={<Terminal className="w-4 h-4 text-green-400" />}
+            title="3 Sessions"
+            subtitle="independent"
+          />
+          <InfoBadge
+            icon={<GitBranch className="w-4 h-4 text-yellow-400" />}
+            title="4 Levels"
+            subtitle="isolation"
+          />
+          <InfoBadge
+            icon={<FlaskConical className="w-4 h-4 text-purple-400" />}
+            title="15 Scenarios"
+            subtitle="guided"
+          />
         </div>
       </div>
     </Card>
+  );
+}
+
+interface InfoBadgeProps {
+  icon: React.ReactNode;
+  title: string;
+  subtitle: string;
+}
+
+function InfoBadge({ icon, title, subtitle }: InfoBadgeProps) {
+  return (
+    <div className="flex items-center gap-2 px-3 py-2 rounded bg-zinc-800/50">
+      {icon}
+      <div className="text-xs">
+        <div className="font-medium">{title}</div>
+        <div className="text-zinc-500">{subtitle}</div>
+      </div>
+    </div>
   );
 }

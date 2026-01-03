@@ -5,6 +5,13 @@ interface QueryResultProps {
   error: QueryError | null;
 }
 
+function getRowKey(row: Record<string, unknown>, index: number): string {
+  if ('id' in row && row.id != null) {
+    return String(row.id);
+  }
+  return `row-${index}`;
+}
+
 export function QueryResultView({ result, error }: QueryResultProps) {
   if (error) {
     return (
@@ -41,7 +48,7 @@ export function QueryResultView({ result, error }: QueryResultProps) {
         </thead>
         <tbody>
           {result.rows.map((row, i) => (
-            <tr key={i} className="border-t border-zinc-800">
+            <tr key={getRowKey(row, i)} className="border-t border-zinc-800">
               {result.fields.map((field) => (
                 <td key={field.name} className="px-3 py-2">
                   {String(row[field.name] ?? 'NULL')}
