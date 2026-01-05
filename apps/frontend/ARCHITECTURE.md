@@ -5,83 +5,35 @@
 React SPA demonstrating PostgreSQL transaction isolation levels. Two modes:
 
 - **Sandbox** — free-form SQL experimentation
-- **Scenarios** — guided step-by-step demos of isolation phenomena
+- **Scenarios** — guided step-by-step demos (15 scenarios)
 
-## Design Decisions
-
-### Why Zustand over Context/Redux?
-
-**Problem:** ScenarioPanel needs to execute SQL in any terminal. Initially used `forwardRef` + `useImperativeHandle`, but this created timing issues between `setSql()` and `execute()` calls.
-
-**Options considered:**
-
-1. **Keep refs, fix timing** — adds complexity, imperative API is a code smell for this use case
-2. **Lift state to App + Context** — works, but callbacks recreate on every state change (stale closures)
-3. **Redux** — overkill for 3 terminals, too much boilerplate
-4. **Zustand** — minimal API, stable action references, granular subscriptions
-
-**Decision:** Zustand. Clean separation between state and UI, no prop drilling, each terminal subscribes only to its own data.
-
-### Why 3 Terminals?
-
-Most isolation demos use 2 sessions. We use 3 because:
-
-- Chain deadlock requires 3 participants (A waits for B, B waits for C, C waits for A)
-- Lock queue visualization needs a "waiting" transaction while two others hold/request locks
-- Demonstrates real-world complexity
-
-### Why SQL in Store (not local state)?
-
-ScenarioPanel needs to both set SQL and execute it in a terminal. With local state:
-
-```typescript
-// Race condition: state update is async
-terminalRef.setSql(sql);
-terminalRef.execute(); // executes OLD sql
-```
-
-With store:
-
-```typescript
-setSql(terminalId, sql); // immediate
-execute(terminalId); // reads from store
-```
-
-Single source of truth, no timing issues.
-
-### Why Scenarios on Frontend (not Backend)?
-
-Scenarios are UI/educational content, not business logic. Backend only needs to execute SQL — it doesn't need to know about "steps" or "explanations".
-
-This also allows:
-
-- Adding scenarios without backend changes
-- Different scenario sets for different audiences (future)
-- Offline scenario browsing (future)
-
-## Component Architecture
+## Component Structure
 
 ```
 src/
 ├── components/
 │   ├── layout/
-│   │   └── header.tsx              # Logo, scenario select, connection status
+│   │   └── header.tsx              # Logo, category dropdowns, connection status
 │   │
 │   ├── terminal/
-│   │   ├── terminal-panel.tsx      # Monaco editor + controls + activity log
+│   │   ├── terminal-panel.tsx      # Main container, orchestrates sub-components
+│   │   ├── terminal-header.tsx     # Title, status badge, isolation select
+│   │   ├── transaction-controls.tsx # BEGIN/COMMIT/ROLLBACK buttons
+│   │   ├── sql-editor.tsx          # Monaco editor + run button
+│   │   ├── activity-log.tsx        # Recent actions log
 │   │   ├── query-result.tsx        # Results table / error display
 │   │   ├── sql-presets.tsx         # Quick-access SQL snippets
 │   │   └── isolation-select.tsx    # Isolation level dropdown
 │   │
 │   ├── database-state/
-│   │   └── database-state.tsx      # Committed data view + Reset
+│   │   └── database-state.tsx      # Committed data view + Reset button
 │   │
 │   ├── explanation/
-│   │   └── explanation-panel.tsx   # Sandbox mode welcome
+│   │   ├── explanation-panel.tsx   # Top info bar
+│   │   └── quick-start-panel.tsx   # Quick start guide (sandbox mode)
 │   │
 │   ├── scenario/
-│   │   ├── scenario-select.tsx     # Scenario picker dropdown
-│   │   └── scenario-panel.tsx      # Step instructions + Copy/Run
+│   │   └── scenario-panel.tsx      # Step instructions + Copy/Run buttons
 │   │
 │   └── ui/                         # Shadcn/ui primitives
 │
@@ -89,13 +41,13 @@ src/
 │   └── session-store.ts            # Terminal sessions state + actions
 │
 ├── hooks/
-│   ├── use-socket.ts               # Connection management
+│   ├── use-socket.ts               # WebSocket connection management
 │   ├── use-committed-data.ts       # Committed data + change detection
 │   ├── use-database-setup.ts       # Schema initialization
-│   └── use-scenario.ts             # Scenario navigation
+│   └── use-scenario.ts             # Scenario navigation + isolation control
 │
 ├── data/
-│   └── scenarios.ts                # Scenario definitions
+│   └── scenarios.ts                # 15 scenario definitions
 │
 ├── lib/
 │   └── socket-client.ts            # Socket.io instance
@@ -105,12 +57,15 @@ src/
 
 ## State Management
 
+Terminal state managed by Zustand store. See [ADR-001](../../docs/adr/001-zustand-over-context-redux.md) for rationale.
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Zustand Store                        │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │ sessions: { 1: TerminalSession, 2: ..., 3: ... }    │   │
-│  │ actions: setSql, execute, commit, rollback, ...     │   │
+│  │ actions: setSql, execute, executeWithSql,           │   │
+│  │          commit, rollback, setIsolationLevel, ...   │   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
         ▲                    ▲                    ▲
@@ -129,14 +84,15 @@ interface SessionStore {
   setSql: (terminalId, sql) => void;
   createSession: (terminalId, isolationLevel?) => Promise<void>;
   execute: (terminalId) => Promise<void>;
+  executeWithSql: (terminalId, sql) => Promise<void>;
   commit: (terminalId) => Promise<void>;
   rollback: (terminalId) => Promise<void>;
   setIsolationLevel: (terminalId, level) => Promise<void>;
 }
 
 interface TerminalSession {
-  state: SessionState | null; // from backend
-  sql: string; // editor content
+  state: SessionState | null;
+  sql: string;
   lastResult: QueryResult | null;
   lastError: QueryError | null;
   lastWasTransactionCommand: boolean;
@@ -155,8 +111,8 @@ User clicks Run
        ▼
 store.execute(terminalId)
        │
-       ├── get sql from sessions[terminalId].sql
-       ├── set isLoading: true
+       ├── Read sql from sessions[terminalId].sql
+       ├── Set isLoading: true
        │
        ▼
 WebSocket: session:execute { sessionId, sql }
@@ -165,7 +121,7 @@ WebSocket: session:execute { sessionId, sql }
 Backend executes, returns result
        │
        ▼
-store updates sessions[terminalId]
+Store updates sessions[terminalId]
        │
        ├── lastResult / lastError
        ├── state (inTransaction, isolationLevel)
@@ -173,22 +129,31 @@ store updates sessions[terminalId]
        └── isLoading: false
 ```
 
-### Scenario Execution
+### Scenario Flow
 
 ```
-User clicks "Run" in ScenarioPanel
+User selects scenario from Header dropdown
        │
        ▼
-store.setSql(step.terminal, step.sql)
+useScenario.start(scenarioId)
+       │
+       ├── Set scenario state
+       ├── Reset step to 0
+       └── Apply isolation levels to all terminals
        │
        ▼
-store.execute(step.terminal)
+User clicks "Run" on step
        │
        ▼
-TerminalPanel re-renders with new sql + result
+store.executeWithSql(terminalId, sql)
+       │
+       ▼
+User clicks "Next" or scenario.stop()
+       │
+       └── Reset isolation levels to READ COMMITTED
 ```
 
-### Committed Data Broadcast
+### Committed Data Updates
 
 ```
 Any terminal commits (explicit or autocommit)
@@ -197,46 +162,68 @@ Any terminal commits (explicit or autocommit)
 Backend broadcasts: data:committed { table, rows }
        │
        ▼
-useCommittedData hook receives
+useCommittedData hook
        │
-       ├── diff against previous data
-       ├── mark changed cells
-       └── clear highlights after 2s
+       ├── Diff against previous data
+       ├── Mark changed cells
+       └── Clear highlights after 2s
 ```
 
-## Error Handling Strategy
+## Scenarios
 
-| Error Type        | Handling                                                |
-| ----------------- | ------------------------------------------------------- |
-| Socket disconnect | Show "Connecting...", disable all controls              |
-| Query error       | Display in Results panel, add to log, session continues |
-| Transaction error | Backend auto-rollbacks, state resets to idle            |
-| Network timeout   | Caught in store, logged as "Execution failed"           |
+15 scenarios in 4 categories. See [ADR-005](../../docs/adr/005-scenarios-on-frontend.md) for why scenarios live on frontend.
 
-## Styling Conventions
+| Category        | Count | Topics                                            |
+| --------------- | ----- | ------------------------------------------------- |
+| Read Anomalies  | 4     | Dirty read, non-repeatable read, phantom read     |
+| Write Anomalies | 4     | Lost update, write skew, FOR UPDATE, SERIALIZABLE |
+| Locks           | 4     | Lock wait, FOR SHARE, SKIP LOCKED, NOWAIT         |
+| Deadlocks       | 3     | Basic deadlock, chain deadlock, lock queue        |
 
-- **Tailwind CSS** + **Shadcn/ui** for consistency
-- **Dark theme** (zinc-900 base) — easier on eyes for code-heavy UI
-- **Color semantics:**
-  - Green: success, committed, active transaction
-  - Yellow: warning, in-transaction state, changed cells
-  - Red: errors
-  - Blue: informational (scenario panel)
-  - Gray: idle, secondary info
+### Scenario Structure
 
-## Performance Considerations
+```typescript
+interface Scenario {
+  id: string;
+  title: string;
+  description: string;
+  difficulty: 'basic' | 'intermediate' | 'advanced';
+  category: 'read-anomalies' | 'write-anomalies' | 'locks' | 'deadlocks';
+  terminals: 2 | 3;
+  setup: {
+    isolationLevels: [IsolationLevel, IsolationLevel, IsolationLevel?];
+  };
+  steps: ScenarioStep[];
+  conclusion: { problem: string; solution: string };
+}
+```
 
-- **Granular subscriptions:** Each TerminalPanel subscribes only to `sessions[terminalId]`, not entire store
-- **Stable action references:** Zustand actions don't change between renders
-- **Monaco Editor:** `automaticLayout: true` handles resize, single instance per terminal
-- **Log trimming:** Max 10 entries per terminal, display last 3
+## Layout
 
-## Testing Strategy (Planned)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ Header (scenario dropdowns, connection status)                  │
+├───────────────────────────────────┬─────────────────────────────┤
+│                                   │                             │
+│  ExplanationPanel / ScenarioPanel │      DatabaseState          │
+│                                   │      (committed data)       │
+├───────────────┬───────────────┬───┴─────────────────────────────┤
+│  Terminal 1   │  Terminal 2   │  Terminal 3                     │
+│               │               │                                 │
+└───────────────┴───────────────┴─────────────────────────────────┘
+```
 
-| Layer      | Tool                  | Focus                           |
-| ---------- | --------------------- | ------------------------------- |
-| Store      | Vitest                | Action logic, state transitions |
-| Components | React Testing Library | User interactions               |
-| E2E        | Playwright            | Full scenarios                  |
+## Hooks
 
-Priority: Store tests first (most logic), E2E for critical paths, component tests where useful.
+| Hook               | Purpose                                    |
+| ------------------ | ------------------------------------------ |
+| `useSocket`        | WebSocket connection, auto-reconnect       |
+| `useCommittedData` | Subscribe to committed data, track changes |
+| `useDatabaseSetup` | Initialize schema on first load            |
+| `useScenario`      | Scenario state, navigation, isolation sync |
+
+## Related Decisions
+
+- [ADR-001](../../docs/adr/001-zustand-over-context-redux.md) — Why Zustand for state
+- [ADR-004](../../docs/adr/004-three-terminals.md) — Why three terminals
+- [ADR-005](../../docs/adr/005-scenarios-on-frontend.md) — Why scenarios on frontend

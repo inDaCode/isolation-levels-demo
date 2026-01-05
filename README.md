@@ -1,134 +1,107 @@
-# PostgreSQL Isolation Levels Demo
+# Isolation Levels Demo
 
-An interactive educational tool for understanding PostgreSQL transaction isolation levels. Run three parallel SQL sessions and observe how different isolation levels affect data visibility and locking behavior.
+Interactive tool for learning PostgreSQL transaction isolation levels through hands-on experimentation.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Demo](docs/demo.gif)
 
-## 🎯 What You'll Learn
+## Why This Exists
 
-| Isolation Level  | Dirty Read | Non-repeatable Read | Phantom Read |
-| ---------------- | ---------- | ------------------- | ------------ |
-| Read Uncommitted | Possible\* | Possible            | Possible     |
-| Read Committed   | No         | Possible            | Possible     |
-| Repeatable Read  | No         | No                  | No\*\*       |
-| Serializable     | No         | No                  | No           |
+Most resources explain isolation levels with text and diagrams. This tool lets you **run real transactions** and **see the differences** — dirty reads, phantom reads, deadlocks, and more.
 
-\*PostgreSQL treats Read Uncommitted as Read Committed  
-\*\*PostgreSQL's Repeatable Read also prevents phantom reads
+Three terminals allow demonstrating scenarios that require multiple participants: chain deadlocks (A→B→C→A), lock queues, and concurrent updates.
 
-## ✨ Features
+## Features
 
-- **Three SQL Terminals** — Independent database sessions for complex scenarios
-- **Real-time Results** — See query results instantly via WebSocket
-- **Isolation Level Selector** — Switch levels with detailed explanations
-- **Committed Data View** — Always see the actual committed state with change highlighting
-- **SQL Presets** — Quick access to common SELECT, UPDATE, and LOCK queries
-- **Guided Scenarios** — Step-by-step demos of isolation phenomena
-- **Transaction Controls** — Visual feedback for BEGIN/COMMIT/ROLLBACK state
+- **3 independent SQL terminals** with separate PostgreSQL connections
+- **15 guided scenarios** covering read anomalies, write anomalies, locks, and deadlocks
+- **Real-time committed data view** with change highlighting
+- **Isolation level selector** per terminal (READ UNCOMMITTED → SERIALIZABLE)
+- **Auto-setup** — isolation levels configured automatically for each scenario
 
-## 🎮 Scenarios
-
-### Basic
-
-| Scenario            | What It Shows                                         |
-| ------------------- | ----------------------------------------------------- |
-| Non-repeatable Read | Same SELECT returns different data in one transaction |
-
-### Intermediate
-
-| Scenario | What It Shows                                         |
-| -------- | ----------------------------------------------------- |
-| Deadlock | Two transactions block each other, PostgreSQL detects |
-
-### Advanced (Coming Soon)
-
-| Scenario       | What It Shows                                  |
-| -------------- | ---------------------------------------------- |
-| Chain Deadlock | Three-way circular lock (requires 3 terminals) |
-| Lock Queue     | One slow transaction blocks everyone           |
-| Lost Update    | Concurrent updates without FOR UPDATE          |
-
-## 🛠 Tech Stack
-
-- **Frontend:** React 19, TypeScript, Tailwind CSS, Shadcn/ui, Monaco Editor
-- **Backend:** NestJS, TypeScript, Socket.io, node-postgres
-- **Database:** PostgreSQL 16
-- **Monorepo:** pnpm workspaces
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- Node.js 20+
-- pnpm 9+
-- Docker & Docker Compose
-
-### Installation
+## Quick Start
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/isolation-levels-demo.git
-cd isolation-levels-demo
-
-# Install dependencies
-pnpm install
+# Prerequisites: Docker, Node.js 18+, pnpm
 
 # Start PostgreSQL
 docker-compose up -d
+
+# Install dependencies
+pnpm install
 
 # Start development servers
 pnpm dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+Open http://localhost:5173
 
-## 📁 Project Structure
+## Scenarios
+
+| Category        | Count | What You'll See                                      |
+| --------------- | ----- | ---------------------------------------------------- |
+| Read Anomalies  | 4     | Dirty read protection, non-repeatable read, phantoms |
+| Write Anomalies | 4     | Lost updates, write skew, SERIALIZABLE protection    |
+| Locks           | 4     | Lock wait, FOR SHARE, SKIP LOCKED, NOWAIT            |
+| Deadlocks       | 3     | Two-way deadlock, chain deadlock, lock queue         |
+
+## Tech Stack
+
+| Layer    | Technology                   |
+| -------- | ---------------------------- |
+| Frontend | React 19, Vite, Zustand      |
+| UI       | Shadcn/ui, Tailwind, Monaco  |
+| Backend  | NestJS, Socket.io            |
+| Database | PostgreSQL 16, node-postgres |
+
+## Architecture
+
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for system overview and [docs/adr/](./docs/adr/) for key design decisions.
 
 ```
-isolation-levels-demo/
+Frontend (React + Zustand)
+        │
+        │ WebSocket
+        ▼
+Backend (NestJS)
+        │
+        │ 3 dedicated connections
+        ▼
+PostgreSQL 16
+```
+
+## Project Structure
+
+```
 ├── apps/
-│   ├── backend/          # NestJS WebSocket server
-│   │   └── src/
-│   │       ├── database/ # Session management
-│   │       └── gateway/  # WebSocket handlers
-│   └── frontend/         # React application
-│       └── src/
-│           ├── components/
-│           │   ├── terminal/       # SQL editor, presets, results
-│           │   ├── scenario/       # Guided scenario UI
-│           │   └── database-state/ # Committed data display
-│           ├── data/               # Scenario definitions
-│           └── hooks/              # State management
+│   ├── backend/     # NestJS WebSocket server
+│   └── frontend/    # React SPA
 ├── packages/
-│   └── shared/           # Shared TypeScript types
-├── docker-compose.yml    # PostgreSQL setup
-└── pnpm-workspace.yaml
+│   └── shared/      # TypeScript types, DB schema
+└── docs/
+    └── adr/         # Architecture Decision Records
 ```
 
-## 🔌 WebSocket API
+## Development
 
-| Event                  | Direction       | Description                 |
-| ---------------------- | --------------- | --------------------------- |
-| `session:create`       | Client → Server | Create new database session |
-| `session:execute`      | Client → Server | Execute SQL query           |
-| `session:commit`       | Client → Server | Commit transaction          |
-| `session:rollback`     | Client → Server | Rollback transaction        |
-| `session:setIsolation` | Client → Server | Change isolation level      |
-| `data:committed`       | Server → Client | Broadcast committed data    |
-| `setup:execute`        | Client → Server | Reset database schema       |
+```bash
+pnpm dev           # Start all (backend + frontend)
+pnpm dev:backend   # Backend only (port 3000)
+pnpm dev:frontend  # Frontend only (port 5173)
+pnpm lint          # ESLint
+pnpm build         # Production build
+```
 
-## 🎨 UI Features
+## Roadmap
 
-- **Dark theme** optimized for focus
-- **Change highlighting** — yellow for modified cells, green for new rows
-- **Transaction indicator** — visual state in each terminal
-- **Activity log** — last 3 actions with timestamps
-- **Keyboard shortcuts** — Ctrl+Enter to execute query
+Potential future improvements:
 
-## 📄 License
+- **Public deployment** — room-based sessions with connection limits for multi-user access
+- **Lock visualization** — real-time pg_locks display showing which transactions hold/wait for locks
+- **Uncommitted data view** — see pending changes before commit
+- **Multi-database support** — MySQL, MariaDB isolation level comparison
+- **PostgreSQL version selector** — compare behavior across PG 14/15/16
+- **Custom schemas** — load user-defined SQL files for experimentation
 
-MIT © inDaCode
+## License
 
-## 🤝 Contributing
-
-Contributions are welcome! Please read the contributing guidelines first.
+MIT
