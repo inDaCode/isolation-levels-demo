@@ -87,6 +87,7 @@ PostgreSQL 16
 pnpm dev           # Start all (backend + frontend)
 pnpm dev:backend   # Backend only (port 3000)
 pnpm dev:frontend  # Frontend only (port 5173)
+pnpm test          # Run all tests (110 tests)
 pnpm lint          # ESLint
 pnpm build         # Production build
 ```
@@ -99,7 +100,7 @@ Potential future improvements:
 - **Lock visualization** — real-time pg_locks display showing which transactions hold/wait for locks
 - **Uncommitted data view** — see pending changes before commit
 - **Multi-database support** — MySQL, MariaDB isolation level comparison
-- **PostgreSQL version selector** — compare behavior across PG 14/15/16
+- **PostgreSQL version selector** — compare behavior across PG 14/15/16/17/18
 - **Custom schemas** — load user-defined SQL files for experimentation
 
 ## License

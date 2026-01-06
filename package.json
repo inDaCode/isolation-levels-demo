@@ -1,15 +1,16 @@
 {
   "name": "isolation-levels-demo",
   "private": true,
-  "packageManager": "pnpm@10.26.2",
+  "packageManager": "pnpm@10.27.0",
   "scripts": {
     "dev": "pnpm build:shared && pnpm dev:run",
     "dev:run": "pnpm --filter frontend --filter backend --parallel dev",
     "dev:backend": "pnpm build:shared && pnpm --filter backend dev",
-    "dev:frontend": "pnpm --filter frontend dev",
+    "dev:frontend": "pnpm build:shared && pnpm --filter frontend dev",
     "build:shared": "pnpm --filter @isolation-demo/shared build",
     "lint": "pnpm --parallel lint",
-    "build": "pnpm build:shared && pnpm --parallel build"
+    "build": "pnpm build:shared && pnpm --parallel build",
+    "test": "pnpm build:shared && pnpm -r test"
   },
   "devDependencies": {
     "prettier": "^3.7.4",

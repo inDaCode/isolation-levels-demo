@@ -113,7 +113,7 @@ export const WS_EVENTS = {
   SESSION_ROLLBACK: 'session:rollback',
   SESSION_SET_ISOLATION: 'session:setIsolation',
   SESSION_DISCONNECT: 'session:disconnect',
-  SETUP_EXECUTE: 'setup:execute',
+  DATABASE_RESET: 'database:reset',
   DATA_GET_COMMITTED: 'data:getCommitted',
 
   // Server → Client

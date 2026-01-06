@@ -10,6 +10,7 @@ import {
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { SessionManagerService } from '../database/session-manager.service';
+import { SETUP_SQL } from '../database/setup.sql';
 import {
   WS_EVENTS,
   type CreateSessionPayload,
@@ -88,9 +89,6 @@ export class TerminalGateway
 
     const state = this.sessionManager.getSessionState(sessionId) ?? undefined;
 
-    // Broadcast committed data after autocommit queries
-    // When not in explicit transaction, any query commits immediately,
-    // so we refresh the committed data view for all clients
     if (!error && !state?.inTransaction) {
       await this.broadcastCommittedData();
     }
@@ -170,13 +168,10 @@ export class TerminalGateway
     return { table: payload.table, rows };
   }
 
-  @SubscribeMessage(WS_EVENTS.SETUP_EXECUTE)
-  async handleSetupExecute(
-    @MessageBody() payload: { sql: string },
-  ): Promise<SetupResponse> {
-    const { success, error } = await this.sessionManager.executeSetup(
-      payload.sql,
-    );
+  @SubscribeMessage(WS_EVENTS.DATABASE_RESET)
+  async handleDatabaseReset(): Promise<SetupResponse> {
+    const { success, error } =
+      await this.sessionManager.executeSetup(SETUP_SQL);
 
     if (success) {
       await this.broadcastCommittedData();

@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { socket } from '@/lib/socket-client';
-import { WS_EVENTS, SETUP_SQL, type SetupResponse } from '@isolation-demo/shared';
+import { WS_EVENTS, type SetupResponse } from '@isolation-demo/shared';
 
 interface UseDatabaseSetupReturn {
   isLoading: boolean;
@@ -20,9 +20,7 @@ export function useDatabaseSetup(autoReset: boolean = false): UseDatabaseSetupRe
     setError(null);
 
     try {
-      const response: SetupResponse = await socket.emitWithAck(WS_EVENTS.SETUP_EXECUTE, {
-        sql: SETUP_SQL,
-      });
+      const response: SetupResponse = await socket.emitWithAck(WS_EVENTS.DATABASE_RESET);
 
       if (!response.success) {
         setError(response.error ?? 'Failed to reset database');
