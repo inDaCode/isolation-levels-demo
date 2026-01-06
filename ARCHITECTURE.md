@@ -12,7 +12,7 @@ Target: developers learning database concurrency concepts through hands-on exper
 │                              Frontend (React)                                │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌──────────────────┐   │
 │  │ Terminal 1  │  │ Terminal 2  │  │ Terminal 3  │  │  Database State  │   │
-│  │ Session A   │  │ Session B   │  │ Session C   │  │  (committed)     │   │
+│  │ Session A   │  │ Session B   │  │ Session C   │  │  + uncommitted   │   │
 │  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └────────┬─────────┘   │
 │         │                │                │                   │             │
 │         └────────────────┴────────────────┴───────────────────┘             │
@@ -33,15 +33,16 @@ Target: developers learning database concurrency concepts through hands-on exper
 │                     │   SessionManagerService   │                           │
 │                     └─────────────┬─────────────┘                           │
 │                                   │                                         │
-│              ┌────────────────────┼────────────────────┐                    │
-│              │                    │                    │                    │
-│        ┌─────┴─────┐        ┌─────┴─────┐        ┌─────┴─────┐              │
-│        │ PG Conn A │        │ PG Conn B │        │ PG Conn C │              │
-│        └─────┬─────┘        └─────┬─────┘        └─────┬─────┘              │
-│              │                    │                    │                    │
-└──────────────┼────────────────────┼────────────────────┼────────────────────┘
-               │                    │                    │
-               └────────────────────┼────────────────────┘
+│        ┌──────────────────────────┼──────────────────────────┐              │
+│        │                          │                          │              │
+│  ┌─────┴─────┐  ┌─────────┐ ┌─────┴─────┐  ┌─────────┐ ┌─────┴─────┐       │
+│  │ PG Conn A │  │ Utility │ │ PG Conn B │  │ Utility │ │ PG Conn C │       │
+│  │ (T1)      │  │ Client  │ │ (T2)      │  │         │ │ (T3)      │       │
+│  └─────┬─────┘  └────┬────┘ └─────┬─────┘  └─────────┘ └─────┬─────┘       │
+│        │             │            │                          │              │
+└────────┼─────────────┼────────────┼──────────────────────────┼──────────────┘
+         │             │            │                          │
+         └─────────────┴────────────┴──────────────────────────┘
                                     │
                           ┌─────────┴─────────┐
                           │   PostgreSQL 16   │
@@ -54,11 +55,11 @@ Target: developers learning database concurrency concepts through hands-on exper
 | ---------- | -------------------- | ------------------------------------------- |
 | Monorepo   | pnpm workspaces      | Package management                          |
 | Frontend   | React 19 + Vite      | SPA with hot reload                         |
-| State      | Zustand              | Terminal session management                 |
+| State      | Zustand              | Terminal session + uncommitted data         |
 | UI         | Shadcn/ui + Tailwind | Component library                           |
 | SQL Editor | Monaco Editor        | Code editing with syntax highlighting       |
 | Backend    | NestJS               | WebSocket server                            |
-| WebSocket  | Socket.io            | Real-time communication                     |
+| WebSocket  | Socket.io (typed)    | Real-time communication                     |
 | Database   | PostgreSQL 16        | All isolation levels including SERIALIZABLE |
 | DB Client  | node-postgres (pg)   | Direct connection management                |
 
@@ -70,7 +71,9 @@ isolation-levels-demo/
 │   ├── backend/                    # NestJS WebSocket server
 │   │   └── src/
 │   │       ├── database/
-│   │       │   └── session-manager.service.ts
+│   │       │   ├── session-manager.service.ts
+│   │       │   ├── session-manager.types.ts
+│   │       │   └── setup.sql.ts
 │   │       └── gateway/
 │   │           └── terminal.gateway.ts
 │   │
@@ -78,8 +81,8 @@ isolation-levels-demo/
 │       └── src/
 │           ├── components/
 │           │   ├── layout/         # Header with scenario dropdowns
-│           │   ├── terminal/       # Terminal components (8 files)
-│           │   ├── database-state/ # Committed data view
+│           │   ├── terminal/       # Terminal components (index + 7 files)
+│           │   ├── database-state/ # Committed + uncommitted data view
 │           │   ├── explanation/    # Info panels
 │           │   └── scenario/       # Guided scenario panel
 │           ├── stores/             # Zustand store
@@ -90,13 +93,36 @@ isolation-levels-demo/
 │   └── shared/                     # @isolation-demo/shared
 │       └── src/
 │           ├── index.ts
-│           ├── types.ts            # WebSocket event types
-│           └── scenarios.ts        # Scenario type definitions
+│           └── types.ts            # WebSocket types + event maps
+│
 ├── docs/
 │   └── adr/                        # Architecture Decision Records
 │
 ├── docker-compose.yml              # PostgreSQL container
 └── pnpm-workspace.yaml
+```
+
+## Key Features
+
+### Uncommitted Data Visualization
+
+Database State panel shows:
+
+- **Committed data** — actual database state
+- **Pending changes** — uncommitted modifications per terminal
+- **Color coding** — T1 (blue), T2 (green), T3 (orange)
+- **Change types** — updates (`→`), inserts (new row), deletes (`→ ∅`)
+
+### Typed WebSocket Protocol
+
+Full TypeScript coverage for Socket.io events:
+
+```typescript
+// Frontend
+const socket: Socket<ServerToClientEvents, ClientToServerEvents>;
+
+// Backend
+server: Server<ClientToServerEvents, ServerToClientEvents>;
 ```
 
 ## Scenarios
@@ -113,7 +139,7 @@ isolation-levels-demo/
 ## Conventions
 
 - **File naming:** kebab-case (`session-store.ts`)
-- **Components:** Named exports, one per file
+- **Components:** Named exports, `index.tsx` as entry point
 - **Types:** Use `import type` for type-only imports
 - **Shared types:** All WebSocket types in `@isolation-demo/shared`
 

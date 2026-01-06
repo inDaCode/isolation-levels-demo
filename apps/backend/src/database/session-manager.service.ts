@@ -6,52 +6,18 @@ import type {
   QueryResult,
   QueryError,
   FieldInfo,
+  UncommittedSnapshot,
 } from '@isolation-demo/shared';
-
-// ─────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────
-
-interface ActiveSession {
-  client: Client;
-  state: SessionState;
-}
-
-type TransactionCommand = 'BEGIN' | 'COMMIT' | 'ROLLBACK';
-
-interface OperationResult {
-  success: boolean;
-  error?: QueryError;
-}
-
-interface QueryExecutionResult {
-  result?: QueryResult;
-  error?: QueryError;
-}
-
-// ─────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────
-
-const ALLOWED_TABLES = ['accounts', 'products'] as const;
-type AllowedTable = (typeof ALLOWED_TABLES)[number];
-
-const PG_TYPE_MAP: Record<number, string> = {
-  16: 'boolean',
-  23: 'integer',
-  25: 'text',
-  700: 'float4',
-  701: 'float8',
-  1043: 'varchar',
-  1082: 'date',
-  1114: 'timestamp',
-  1184: 'timestamptz',
-  1700: 'numeric',
-};
-
-// ─────────────────────────────────────────────
-// Service
-// ─────────────────────────────────────────────
+import {
+  type TerminalId,
+  type ActiveSession,
+  type TransactionCommand,
+  type OperationResult,
+  type QueryExecutionResult,
+  type AllowedTable,
+  ALLOWED_TABLES,
+  PG_TYPE_MAP,
+} from './session-manager.types';
 
 @Injectable()
 export class SessionManagerService implements OnModuleDestroy {
@@ -72,13 +38,14 @@ export class SessionManagerService implements OnModuleDestroy {
   // ─────────────────────────────────────────────
 
   async createSession(
+    terminalId: TerminalId,
     isolationLevel: IsolationLevel = 'READ COMMITTED',
   ): Promise<SessionState> {
     const sessionId = this.generateSessionId();
     const client = new Client(this.connectionConfig);
 
     await client.connect();
-    this.logger.log(`Session created: ${sessionId}`);
+    this.logger.log(`Session created: ${sessionId} (terminal ${terminalId})`);
 
     const state: SessionState = {
       sessionId,
@@ -87,7 +54,7 @@ export class SessionManagerService implements OnModuleDestroy {
       createdAt: new Date(),
     };
 
-    this.sessions.set(sessionId, { client, state });
+    this.sessions.set(sessionId, { client, state, terminalId });
     return state;
   }
 
@@ -129,7 +96,17 @@ export class SessionManagerService implements OnModuleDestroy {
     const command = this.parseTransactionCommand(sql);
 
     if (command) {
-      return this.executeTransactionCommand(session, command, startTime);
+      const result = await this.executeTransactionCommand(
+        session,
+        command,
+        startTime,
+      );
+
+      if (!result.error && command === 'BEGIN') {
+        result.uncommitted = await this.getSessionSnapshot(session);
+      }
+
+      return result;
     }
 
     return this.executeRegularQuery(session, sql, startTime);
@@ -187,14 +164,19 @@ export class SessionManagerService implements OnModuleDestroy {
         dataType: PG_TYPE_MAP[f.dataTypeID] ?? 'unknown',
       }));
 
-      return {
-        result: {
-          rows: pgResult.rows as Record<string, unknown>[],
-          rowCount: pgResult.rowCount ?? 0,
-          fields,
-          duration,
-        },
+      const result: QueryResult = {
+        rows: pgResult.rows as Record<string, unknown>[],
+        rowCount: pgResult.rowCount ?? 0,
+        fields,
+        duration,
       };
+
+      let uncommitted: UncommittedSnapshot | undefined;
+      if (state.inTransaction) {
+        uncommitted = await this.getSessionSnapshot(session);
+      }
+
+      return { result, uncommitted };
     } catch (err) {
       if (state.inTransaction) {
         await this.silentRollback(client);
@@ -202,6 +184,25 @@ export class SessionManagerService implements OnModuleDestroy {
       }
       return { error: this.parseError(err) };
     }
+  }
+
+  private async getSessionSnapshot(
+    session: ActiveSession,
+  ): Promise<UncommittedSnapshot> {
+    const { client, terminalId } = session;
+
+    const [accountsResult, productsResult] = await Promise.all([
+      client.query('SELECT * FROM accounts ORDER BY id'),
+      client.query('SELECT * FROM products ORDER BY id'),
+    ]);
+
+    return {
+      terminalId,
+      tables: {
+        accounts: accountsResult.rows as Record<string, unknown>[],
+        products: productsResult.rows as Record<string, unknown>[],
+      },
+    };
   }
 
   // ─────────────────────────────────────────────

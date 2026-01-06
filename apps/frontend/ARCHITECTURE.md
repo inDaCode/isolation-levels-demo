@@ -13,66 +13,65 @@ React SPA demonstrating PostgreSQL transaction isolation levels. Two modes:
 src/
 ├── components/
 │   ├── layout/
-│   │   └── header.tsx              # Logo, category dropdowns, connection status
+│   │   └── header.tsx                # Logo, category dropdowns, connection status
 │   │
 │   ├── terminal/
-│   │   ├── terminal-panel.tsx      # Main container, orchestrates sub-components
-│   │   ├── terminal-header.tsx     # Title, status badge, isolation select
-│   │   ├── transaction-controls.tsx # BEGIN/COMMIT/ROLLBACK buttons
-│   │   ├── sql-editor.tsx          # Monaco editor + run button
-│   │   ├── activity-log.tsx        # Recent actions log
-│   │   ├── query-result.tsx        # Results table / error display
-│   │   ├── sql-presets.tsx         # Quick-access SQL snippets
-│   │   └── isolation-select.tsx    # Isolation level dropdown
+│   │   ├── index.tsx                 # Main container (TerminalPanel)
+│   │   ├── terminal-header.tsx       # Title (colored), status, isolation select
+│   │   ├── transaction-controls.tsx  # BEGIN/COMMIT/ROLLBACK buttons
+│   │   ├── sql-editor.tsx            # Monaco editor + run button
+│   │   ├── activity-log.tsx          # Recent actions log
+│   │   ├── query-result.tsx          # Results table / error display
+│   │   ├── sql-presets.tsx           # Quick-access SQL snippets
+│   │   └── isolation-select.tsx      # Isolation level dropdown
 │   │
 │   ├── database-state/
-│   │   └── database-state.tsx      # Committed data view + Reset button
+│   │   ├── index.tsx                 # Main container (DatabaseState)
+│   │   ├── table-view.tsx            # Table with committed + pending data
+│   │   ├── pending-changes.ts        # Diff computation logic
+│   │   └── constants.ts              # Terminal colors
 │   │
 │   ├── explanation/
-│   │   ├── explanation-panel.tsx   # Top info bar
-│   │   └── quick-start-panel.tsx   # Quick start guide (sandbox mode)
+│   │   ├── explanation-panel.tsx     # Top info bar
+│   │   └── quick-start-panel.tsx     # Quick start guide (sandbox mode)
 │   │
 │   ├── scenario/
-│   │   └── scenario-panel.tsx      # Step instructions + Copy/Run buttons
+│   │   └── scenario-panel.tsx        # Step instructions + Copy/Run buttons
 │   │
-│   └── ui/                         # Shadcn/ui primitives
+│   └── ui/                           # Shadcn/ui primitives
 │
 ├── stores/
-│   └── session-store.ts            # Terminal sessions state + actions
+│   └── session-store.ts              # Terminal sessions + uncommitted data
 │
 ├── hooks/
-│   ├── use-socket.ts               # WebSocket connection management
-│   ├── use-committed-data.ts       # Committed data + change detection
-│   ├── use-database-setup.ts       # Schema initialization
-│   └── use-scenario.ts             # Scenario navigation + isolation control
+│   ├── use-socket.ts                 # WebSocket connection management
+│   ├── use-committed-data.ts         # Committed data + change detection
+│   ├── use-database-setup.ts         # Schema initialization
+│   └── use-scenario.ts               # Scenario navigation + isolation control
 │
 ├── data/
-│   └── scenarios.ts                # 15 scenario definitions
+│   └── scenarios.ts                  # 15 scenario definitions
 │
 ├── lib/
-│   └── socket-client.ts            # Socket.io instance
+│   ├── socket-client.ts              # Typed Socket.io instance
+│   └── utils.ts                      # Tailwind cn() helper
 │
-└── App.tsx                         # Layout orchestration
+└── App.tsx                           # Layout orchestration
 ```
 
 ## State Management
 
-Terminal state managed by Zustand store. See [ADR-001](../../docs/adr/001-zustand-over-context-redux.md) for rationale.
+Terminal state and uncommitted data managed by Zustand store.
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        Zustand Store                        │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │ sessions: { 1: TerminalSession, 2: ..., 3: ... }    │   │
-│  │ actions: setSql, execute, executeWithSql,           │   │
-│  │          commit, rollback, setIsolationLevel, ...   │   │
+│  │ uncommitted: { 1: tables | null, 2: ..., 3: ... }   │   │
+│  │ actions: execute, commit, rollback, clearUncommitted│   │
 │  └─────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
-        ▲                    ▲                    ▲
-        │                    │                    │
-   TerminalPanel(1)    TerminalPanel(2)    ScenarioPanel
-   subscribes to       subscribes to       calls actions
-   sessions[1]         sessions[2]         for any terminal
 ```
 
 ### Store Structure
@@ -80,6 +79,7 @@ Terminal state managed by Zustand store. See [ADR-001](../../docs/adr/001-zustan
 ```typescript
 interface SessionStore {
   sessions: Record<TerminalId, TerminalSession>;
+  uncommitted: Record<TerminalId, UncommittedTables | null>;
 
   setSql: (terminalId, sql) => void;
   createSession: (terminalId, isolationLevel?) => Promise<void>;
@@ -88,6 +88,7 @@ interface SessionStore {
   commit: (terminalId) => Promise<void>;
   rollback: (terminalId) => Promise<void>;
   setIsolationLevel: (terminalId, level) => Promise<void>;
+  clearUncommitted: (terminalId) => void;
 }
 
 interface TerminalSession {
@@ -101,77 +102,41 @@ interface TerminalSession {
 }
 ```
 
-## Data Flow
-
-### Query Execution
+## Uncommitted Data Flow
 
 ```
-User clicks Run
+Terminal executes query in transaction
        │
        ▼
-store.execute(terminalId)
-       │
-       ├── Read sql from sessions[terminalId].sql
-       ├── Set isLoading: true
+Backend returns { result, uncommitted: { terminalId, tables } }
        │
        ▼
-WebSocket: session:execute { sessionId, sql }
+Store: uncommitted[terminalId] = tables
        │
        ▼
-Backend executes, returns result
+DatabaseState subscribes to uncommitted
        │
        ▼
-Store updates sessions[terminalId]
+computePendingChanges() diffs committed vs uncommitted
        │
-       ├── lastResult / lastError
-       ├── state (inTransaction, isolationLevel)
-       ├── log entry
-       └── isLoading: false
+       ▼
+TableView renders:
+  - Updates: "1000 → 500 (T1)" in blue
+  - Inserts: new row with blue background
+  - Deletes: "1000 → ∅ (T1)" strikethrough
 ```
 
-### Scenario Flow
+## Terminal Colors
 
-```
-User selects scenario from Header dropdown
-       │
-       ▼
-useScenario.start(scenarioId)
-       │
-       ├── Set scenario state
-       ├── Reset step to 0
-       └── Apply isolation levels to all terminals
-       │
-       ▼
-User clicks "Run" on step
-       │
-       ▼
-store.executeWithSql(terminalId, sql)
-       │
-       ▼
-User clicks "Next" or scenario.stop()
-       │
-       └── Reset isolation levels to READ COMMITTED
-```
+Consistent across the app:
 
-### Committed Data Updates
-
-```
-Any terminal commits (explicit or autocommit)
-       │
-       ▼
-Backend broadcasts: data:committed { table, rows }
-       │
-       ▼
-useCommittedData hook
-       │
-       ├── Diff against previous data
-       ├── Mark changed cells
-       └── Clear highlights after 2s
-```
+- **Terminal 1**: Blue (`text-blue-400`)
+- **Terminal 2**: Green (`text-green-400`)
+- **Terminal 3**: Orange (`text-orange-400`)
 
 ## Scenarios
 
-15 scenarios in 4 categories. See [ADR-005](../../docs/adr/005-scenarios-on-frontend.md) for why scenarios live on frontend.
+15 scenarios in 4 categories. See [ADR-005](../../docs/adr/005-scenarios-on-frontend.md).
 
 | Category        | Count | Topics                                            |
 | --------------- | ----- | ------------------------------------------------- |
@@ -206,10 +171,10 @@ interface Scenario {
 ├───────────────────────────────────┬─────────────────────────────┤
 │                                   │                             │
 │  ExplanationPanel / ScenarioPanel │      DatabaseState          │
-│                                   │      (committed data)       │
+│                                   │   (committed + uncommitted) │
 ├───────────────┬───────────────┬───┴─────────────────────────────┤
 │  Terminal 1   │  Terminal 2   │  Terminal 3                     │
-│               │               │                                 │
+│  (blue)       │  (green)      │  (orange)                       │
 └───────────────┴───────────────┴─────────────────────────────────┘
 ```
 
@@ -217,7 +182,7 @@ interface Scenario {
 
 | Hook               | Purpose                                    |
 | ------------------ | ------------------------------------------ |
-| `useSocket`        | WebSocket connection, auto-reconnect       |
+| `useSocket`        | Typed WebSocket connection, auto-reconnect |
 | `useCommittedData` | Subscribe to committed data, track changes |
 | `useDatabaseSetup` | Initialize schema on first load            |
 | `useScenario`      | Scenario state, navigation, isolation sync |

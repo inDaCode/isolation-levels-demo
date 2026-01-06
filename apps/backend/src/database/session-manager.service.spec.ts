@@ -6,7 +6,6 @@ describe('SessionManagerService', () => {
 
   beforeEach(async () => {
     service = new SessionManagerService();
-    // Ensure tables exist
     await service.executeSetup(SETUP_SQL);
   });
 
@@ -16,32 +15,32 @@ describe('SessionManagerService', () => {
 
   describe('createSession', () => {
     it('returns valid session state with generated id', async () => {
-      const state = await service.createSession();
+      const state = await service.createSession(1);
 
       expect(state.sessionId).toMatch(/^sess_[a-z0-9]+_[a-z0-9]+$/);
     });
 
     it('sets inTransaction to false', async () => {
-      const state = await service.createSession();
+      const state = await service.createSession(1);
 
       expect(state.inTransaction).toBe(false);
     });
 
     it('uses READ COMMITTED as default isolation level', async () => {
-      const state = await service.createSession();
+      const state = await service.createSession(1);
 
       expect(state.isolationLevel).toBe('READ COMMITTED');
     });
 
     it('respects custom isolation level parameter', async () => {
-      const state = await service.createSession('SERIALIZABLE');
+      const state = await service.createSession(1, 'SERIALIZABLE');
 
       expect(state.isolationLevel).toBe('SERIALIZABLE');
     });
 
     it('sets createdAt to current time', async () => {
       const before = new Date();
-      const state = await service.createSession();
+      const state = await service.createSession(1);
       const after = new Date();
 
       expect(state.createdAt.getTime()).toBeGreaterThanOrEqual(
@@ -55,7 +54,7 @@ describe('SessionManagerService', () => {
     let sessionId: string;
 
     beforeEach(async () => {
-      const state = await service.createSession();
+      const state = await service.createSession(1);
       sessionId = state.sessionId;
     });
 
@@ -108,6 +107,15 @@ describe('SessionManagerService', () => {
         expect(typeof result?.duration).toBe('number');
         expect(result?.duration).toBeGreaterThanOrEqual(0);
       });
+
+      it('does not return uncommitted snapshot outside transaction', async () => {
+        const { uncommitted } = await service.executeQuery(
+          sessionId,
+          'SELECT * FROM accounts',
+        );
+
+        expect(uncommitted).toBeUndefined();
+      });
     });
 
     describe('BEGIN', () => {
@@ -119,7 +127,10 @@ describe('SessionManagerService', () => {
       });
 
       it('uses configured isolation level', async () => {
-        const { sessionId: sid } = await service.createSession('SERIALIZABLE');
+        const { sessionId: sid } = await service.createSession(
+          1,
+          'SERIALIZABLE',
+        );
         await service.executeQuery(sid, 'BEGIN');
 
         const { result } = await service.executeQuery(
@@ -144,6 +155,15 @@ describe('SessionManagerService', () => {
 
         const state = service.getSessionState(sessionId);
         expect(state?.inTransaction).toBe(true);
+      });
+
+      it('returns uncommitted snapshot after BEGIN', async () => {
+        const { uncommitted } = await service.executeQuery(sessionId, 'BEGIN');
+
+        expect(uncommitted).toBeDefined();
+        expect(uncommitted?.terminalId).toBe(1);
+        expect(uncommitted?.tables.accounts).toHaveLength(3);
+        expect(uncommitted?.tables.products).toHaveLength(3);
       });
     });
 
@@ -202,6 +222,74 @@ describe('SessionManagerService', () => {
       });
     });
 
+    describe('uncommitted snapshots', () => {
+      it('returns uncommitted snapshot for queries in transaction', async () => {
+        await service.executeQuery(sessionId, 'BEGIN');
+        const { uncommitted } = await service.executeQuery(
+          sessionId,
+          'SELECT * FROM accounts',
+        );
+
+        expect(uncommitted).toBeDefined();
+        expect(uncommitted?.terminalId).toBe(1);
+      });
+
+      it('reflects uncommitted changes in snapshot', async () => {
+        await service.executeQuery(sessionId, 'BEGIN');
+        await service.executeQuery(
+          sessionId,
+          'UPDATE accounts SET balance = 9999 WHERE id = 1',
+        );
+        const { uncommitted } = await service.executeQuery(
+          sessionId,
+          'SELECT 1',
+        );
+
+        const account = uncommitted?.tables.accounts.find((a) => a.id === 1);
+        expect(account?.balance).toBe(9999);
+      });
+
+      it('reflects uncommitted inserts in snapshot', async () => {
+        await service.executeQuery(sessionId, 'BEGIN');
+        const { uncommitted } = await service.executeQuery(
+          sessionId,
+          "INSERT INTO accounts (name, balance) VALUES ('NewUser', 500)",
+        );
+
+        expect(uncommitted?.tables.accounts).toHaveLength(4);
+      });
+
+      it('reflects uncommitted deletes in snapshot', async () => {
+        await service.executeQuery(sessionId, 'BEGIN');
+        const { uncommitted } = await service.executeQuery(
+          sessionId,
+          'DELETE FROM accounts WHERE id = 1',
+        );
+
+        expect(uncommitted?.tables.accounts).toHaveLength(2);
+      });
+
+      it('includes correct terminalId in snapshot', async () => {
+        const { sessionId: sid2 } = await service.createSession(2);
+        const { sessionId: sid3 } = await service.createSession(3);
+
+        await service.executeQuery(sid2, 'BEGIN');
+        await service.executeQuery(sid3, 'BEGIN');
+
+        const { uncommitted: u2 } = await service.executeQuery(
+          sid2,
+          'SELECT 1',
+        );
+        const { uncommitted: u3 } = await service.executeQuery(
+          sid3,
+          'SELECT 1',
+        );
+
+        expect(u2?.terminalId).toBe(2);
+        expect(u3?.terminalId).toBe(3);
+      });
+    });
+
     describe('errors', () => {
       it('returns QueryError for syntax errors', async () => {
         const { error } = await service.executeQuery(
@@ -245,7 +333,7 @@ describe('SessionManagerService', () => {
     let sessionId: string;
 
     beforeEach(async () => {
-      const state = await service.createSession();
+      const state = await service.createSession(1);
       sessionId = state.sessionId;
     });
 
@@ -276,7 +364,7 @@ describe('SessionManagerService', () => {
     let sessionId: string;
 
     beforeEach(async () => {
-      const state = await service.createSession();
+      const state = await service.createSession(1);
       sessionId = state.sessionId;
     });
 
@@ -307,7 +395,7 @@ describe('SessionManagerService', () => {
     let sessionId: string;
 
     beforeEach(async () => {
-      const state = await service.createSession();
+      const state = await service.createSession(1);
       sessionId = state.sessionId;
     });
 
@@ -357,7 +445,7 @@ describe('SessionManagerService', () => {
 
   describe('getSessionState', () => {
     it('returns state for existing session', async () => {
-      const created = await service.createSession('SERIALIZABLE');
+      const created = await service.createSession(1, 'SERIALIZABLE');
       const state = service.getSessionState(created.sessionId);
 
       expect(state).toMatchObject({
@@ -412,14 +500,14 @@ describe('SessionManagerService', () => {
 
   describe('closeSession', () => {
     it('removes session from map', async () => {
-      const { sessionId } = await service.createSession();
+      const { sessionId } = await service.createSession(1);
       await service.closeSession(sessionId);
 
       expect(service.getSessionState(sessionId)).toBeNull();
     });
 
     it('rolls back active transaction before closing', async () => {
-      const { sessionId } = await service.createSession();
+      const { sessionId } = await service.createSession(1);
       await service.executeQuery(sessionId, 'BEGIN');
       await service.executeQuery(
         sessionId,
@@ -432,7 +520,7 @@ describe('SessionManagerService', () => {
     });
 
     it('handles already closed session gracefully', async () => {
-      const { sessionId } = await service.createSession();
+      const { sessionId } = await service.createSession(1);
       await service.closeSession(sessionId);
 
       await expect(service.closeSession(sessionId)).resolves.toBeUndefined();
@@ -441,9 +529,9 @@ describe('SessionManagerService', () => {
 
   describe('onModuleDestroy', () => {
     it('closes all active sessions', async () => {
-      const s1 = await service.createSession();
-      const s2 = await service.createSession();
-      const s3 = await service.createSession();
+      const s1 = await service.createSession(1);
+      const s2 = await service.createSession(2);
+      const s3 = await service.createSession(3);
 
       await service.onModuleDestroy();
 
@@ -455,8 +543,8 @@ describe('SessionManagerService', () => {
 
   describe('isolation level behavior', () => {
     it('READ COMMITTED sees committed changes from other transactions', async () => {
-      const s1 = await service.createSession('READ COMMITTED');
-      const s2 = await service.createSession('READ COMMITTED');
+      const s1 = await service.createSession(1, 'READ COMMITTED');
+      const s2 = await service.createSession(2, 'READ COMMITTED');
 
       await service.executeQuery(s1.sessionId, 'BEGIN');
       const { result: before } = await service.executeQuery(
@@ -479,8 +567,8 @@ describe('SessionManagerService', () => {
     });
 
     it('REPEATABLE READ does not see committed changes from other transactions', async () => {
-      const s1 = await service.createSession('REPEATABLE READ');
-      const s2 = await service.createSession('READ COMMITTED');
+      const s1 = await service.createSession(1, 'REPEATABLE READ');
+      const s2 = await service.createSession(2, 'READ COMMITTED');
 
       await service.executeQuery(s1.sessionId, 'BEGIN');
       const { result: before } = await service.executeQuery(

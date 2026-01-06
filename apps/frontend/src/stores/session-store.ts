@@ -9,6 +9,7 @@ import {
   type SessionCreatedEvent,
   type QueryResultEvent,
   type SessionOperationResult,
+  type UncommittedSnapshot,
 } from '@isolation-demo/shared';
 
 // --- Types ---
@@ -32,8 +33,11 @@ export interface TerminalSession {
 
 export type TerminalId = 1 | 2 | 3;
 
+export type UncommittedData = Record<TerminalId, UncommittedSnapshot['tables'] | null>;
+
 interface SessionStore {
   sessions: Record<TerminalId, TerminalSession>;
+  uncommitted: UncommittedData;
 
   setSql: (terminalId: TerminalId, sql: string) => void;
   createSession: (terminalId: TerminalId, isolationLevel?: IsolationLevel) => Promise<void>;
@@ -42,6 +46,7 @@ interface SessionStore {
   commit: (terminalId: TerminalId) => Promise<void>;
   rollback: (terminalId: TerminalId) => Promise<void>;
   setIsolationLevel: (terminalId: TerminalId, level: IsolationLevel) => Promise<void>;
+  clearUncommitted: (terminalId: TerminalId) => void;
 }
 
 // --- Constants ---
@@ -107,6 +112,18 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     }));
   };
 
+  const updateUncommitted = (
+    terminalId: TerminalId,
+    data: UncommittedSnapshot['tables'] | null,
+  ) => {
+    set((state) => ({
+      uncommitted: {
+        ...state.uncommitted,
+        [terminalId]: data,
+      },
+    }));
+  };
+
   const addLog = (terminalId: TerminalId, message: string, type: LogEntry['type'] = 'info') => {
     const session = get().sessions[terminalId];
     const newLog = [
@@ -122,6 +139,11 @@ export const useSessionStore = create<SessionStore>((set, get) => {
       2: createInitialSession(),
       3: createInitialSession(),
     },
+    uncommitted: {
+      1: null,
+      2: null,
+      3: null,
+    },
 
     setSql: (terminalId, sql) => {
       updateSession(terminalId, { sql });
@@ -132,6 +154,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
 
       try {
         const response: SessionCreatedEvent = await socket.emitWithAck(WS_EVENTS.SESSION_CREATE, {
+          terminalId,
           isolationLevel,
         });
         updateSession(terminalId, { state: response.state, isLoading: false });
@@ -161,6 +184,14 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           sessionId: session.state.sessionId,
           sql,
         });
+
+        // Update uncommitted data
+        if (response.uncommitted) {
+          updateUncommitted(response.uncommitted.terminalId, response.uncommitted.tables);
+        } else if (!response.state?.inTransaction) {
+          // Clear uncommitted when transaction ends
+          updateUncommitted(terminalId, null);
+        }
 
         if (response.error) {
           updateSession(terminalId, {
@@ -215,6 +246,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           { sessionId: session.state.sessionId },
         );
 
+        // Clear uncommitted on commit
+        updateUncommitted(terminalId, null);
+
         if (response.state) {
           updateSession(terminalId, {
             state: response.state,
@@ -246,6 +280,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           WS_EVENTS.SESSION_ROLLBACK,
           { sessionId: session.state.sessionId },
         );
+
+        // Clear uncommitted on rollback
+        updateUncommitted(terminalId, null);
 
         if (response.state) {
           updateSession(terminalId, {
@@ -288,6 +325,10 @@ export const useSessionStore = create<SessionStore>((set, get) => {
         addLog(terminalId, getErrorMessage(error), 'error');
       }
     },
+
+    clearUncommitted: (terminalId) => {
+      updateUncommitted(terminalId, null);
+    },
   };
 });
 
@@ -295,3 +336,5 @@ export const useSessionStore = create<SessionStore>((set, get) => {
 
 export const selectSession = (terminalId: TerminalId) => (state: SessionStore) =>
   state.sessions[terminalId];
+
+export const selectUncommitted = (state: SessionStore) => state.uncommitted;

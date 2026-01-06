@@ -73,7 +73,8 @@ export class TerminalGateway
     @MessageBody() payload: CreateSessionPayload,
   ): Promise<SessionCreatedEvent> {
     const state = await this.sessionManager.createSession(
-      payload?.isolationLevel,
+      payload.terminalId,
+      payload.isolationLevel,
     );
     this.socketSessions.get(client.id)?.add(state.sessionId);
     return { sessionId: state.sessionId, state };
@@ -84,17 +85,15 @@ export class TerminalGateway
     @MessageBody() payload: ExecuteQueryPayload,
   ): Promise<QueryResultEvent> {
     const { sessionId, sql } = payload;
-    const { result, error } = await this.sessionManager.executeQuery(
-      sessionId,
-      sql,
-    );
+    const { result, error, uncommitted } =
+      await this.sessionManager.executeQuery(sessionId, sql);
     const state = this.sessionManager.getSessionState(sessionId) ?? undefined;
 
     if (!error && !state?.inTransaction) {
       await this.broadcastCommittedData();
     }
 
-    return { sessionId, result, error, state };
+    return { sessionId, result, error, state, uncommitted };
   }
 
   @SubscribeMessage(WS_EVENTS.SESSION_COMMIT)

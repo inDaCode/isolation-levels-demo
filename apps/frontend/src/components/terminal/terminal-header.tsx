@@ -13,6 +13,12 @@ interface TerminalHeaderProps {
   lockIsolation: boolean;
 }
 
+const TERMINAL_COLORS: Record<TerminalId, string> = {
+  1: 'text-blue-400',
+  2: 'text-green-400',
+  3: 'text-orange-400',
+};
+
 export function TerminalHeader({
   terminalId,
   isLoading,
@@ -27,7 +33,9 @@ export function TerminalHeader({
   return (
     <div className="flex items-center justify-between shrink-0">
       <div className="flex items-center gap-2">
-        <span className="font-semibold">Terminal {terminalId}</span>
+        <span className={`font-semibold ${TERMINAL_COLORS[terminalId]}`}>
+          Terminal {terminalId}
+        </span>
         <Badge variant="outline" className="gap-1.5 text-xs">
           {isLoading ? (
             <Loader2 className="w-3 h-3 animate-spin" />

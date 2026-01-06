@@ -2,19 +2,20 @@
 
 ## Overview
 
-NestJS WebSocket server managing PostgreSQL sessions. Each connected client can create multiple database sessions with independent transaction states and isolation levels.
+NestJS WebSocket server managing PostgreSQL sessions. Each terminal has a dedicated database connection with independent transaction state and isolation level.
 
 ## Structure
 
 ```
 src/
 ├── database/
-│   ├── database.module.ts          # Database module
-│   ├── session-manager.service.ts  # PG connection lifecycle
-│   └── setup.sql.ts                # Database setup SQL
+│   ├── database.module.ts            # Database module
+│   ├── session-manager.service.ts    # PG connection lifecycle
+│   ├── session-manager.types.ts      # Types and constants
+│   └── setup.sql.ts                  # Database setup SQL
 ├── gateway/
-│   ├── gateway.module.ts           # Gateway module
-│   └── terminal.gateway.ts         # WebSocket event handlers
+│   ├── gateway.module.ts             # Gateway module
+│   └── terminal.gateway.ts           # WebSocket event handlers
 ├── app.module.ts
 └── main.ts
 ```
@@ -23,7 +24,7 @@ src/
 
 ### TerminalGateway
 
-WebSocket gateway handling all client events. Routes requests to SessionManagerService based on `sessionId`.
+WebSocket gateway handling all client events. Fully typed with `ClientToServerEvents` / `ServerToClientEvents`.
 
 Responsibilities:
 
@@ -33,38 +34,59 @@ Responsibilities:
 
 ### SessionManagerService
 
-Manages PostgreSQL connections. One `pg.Client` per terminal session.
+Manages PostgreSQL connections:
+
+- **3 dedicated connections** — one per terminal (T1, T2, T3)
+- **1 utility connection** — for reading committed data and setup
 
 Responsibilities:
 
-- Create/destroy PG connections
-- Execute SQL with proper transaction handling
+- Create/destroy PG connections per terminal
+- Execute SQL with transaction handling
+- Return uncommitted snapshots during transactions
 - Track session state (isolation level, in-transaction)
-- Detect autocommit vs explicit transactions
 
-See [ADR-003](../../docs/adr/003-dedicated-connections-over-pool.md) for why dedicated connections instead of pool.
+See [ADR-003](../../docs/adr/003-dedicated-connections-over-pool.md) for why dedicated connections.
 
 ## WebSocket Protocol
 
-### Client to Server
+Fully typed — see `@isolation-demo/shared` for `ClientToServerEvents` and `ServerToClientEvents`.
 
-| Event                  | Payload                | Description              |
-| ---------------------- | ---------------------- | ------------------------ |
-| `session:create`       | `{ isolationLevel? }`  | Create new PG connection |
-| `session:execute`      | `{ sessionId, sql }`   | Execute SQL query        |
-| `session:commit`       | `{ sessionId }`        | Commit transaction       |
-| `session:rollback`     | `{ sessionId }`        | Rollback transaction     |
-| `session:setIsolation` | `{ sessionId, level }` | Change isolation level   |
-| `setup:execute`        | `{ sql }`              | Reset database schema    |
-| `data:getCommitted`    | `{ table }`            | Fetch committed data     |
+### Client → Server
 
-### Server to Client
+| Event                  | Payload                      | Description            |
+| ---------------------- | ---------------------------- | ---------------------- |
+| `session:create`       | `{ terminalId, isolation? }` | Create PG connection   |
+| `session:execute`      | `{ sessionId, sql }`         | Execute SQL query      |
+| `session:commit`       | `{ sessionId }`              | Commit transaction     |
+| `session:rollback`     | `{ sessionId }`              | Rollback transaction   |
+| `session:setIsolation` | `{ sessionId, level }`       | Change isolation level |
+| `database:reset`       | —                            | Reset database schema  |
+| `data:getCommitted`    | `{ table }`                  | Fetch committed data   |
 
-| Event             | Payload                                 | Description                |
-| ----------------- | --------------------------------------- | -------------------------- |
-| `session:created` | `{ sessionId, state }`                  | Session ready              |
-| `session:result`  | `{ sessionId, result?, error?, state }` | Query result or error      |
-| `data:committed`  | `{ table, rows }`                       | Broadcast after any commit |
+### Server → Client
+
+| Event             | Payload                                       | Description             |
+| ----------------- | --------------------------------------------- | ----------------------- |
+| `session:created` | `{ sessionId, state }`                        | Session ready           |
+| `session:result`  | `{ sessionId, result?, error?, uncommitted?}` | Query result + snapshot |
+| `data:committed`  | `{ table, rows }`                             | Broadcast after commit  |
+
+## Uncommitted Snapshots
+
+When executing queries in a transaction, the response includes an `uncommitted` snapshot:
+
+```typescript
+interface UncommittedSnapshot {
+  terminalId: 1 | 2 | 3;
+  tables: {
+    accounts: Record<string, unknown>[];
+    products: Record<string, unknown>[];
+  };
+}
+```
+
+This allows the frontend to show pending changes before commit.
 
 ## Session State
 
@@ -73,6 +95,7 @@ interface SessionState {
   sessionId: string;
   isolationLevel: IsolationLevel;
   inTransaction: boolean;
+  createdAt: Date;
 }
 
 type IsolationLevel =
@@ -87,9 +110,9 @@ type IsolationLevel =
 ### Explicit Transactions
 
 ```
-BEGIN                    → inTransaction: true
-  SELECT/UPDATE/etc      → stays in transaction
-COMMIT/ROLLBACK          → inTransaction: false
+BEGIN                    → inTransaction: true, return snapshot
+  SELECT/UPDATE/etc      → stays in transaction, return snapshot
+COMMIT/ROLLBACK          → inTransaction: false, clear snapshot
 ```
 
 ### Autocommit
@@ -102,56 +125,17 @@ SELECT/UPDATE (no BEGIN) → executes immediately, commits
 ### Isolation Level Changes
 
 - Only allowed outside transactions
-- Applied via `SET TRANSACTION ISOLATION LEVEL` on next `BEGIN`
-
-## Data Flow
-
-### Query Execution
-
-```
-Client: session:execute { sessionId: "abc", sql: "SELECT * FROM accounts" }
-                │
-                ▼
-TerminalGateway.handleExecute()
-                │
-                ▼
-SessionManagerService.execute(sessionId, sql)
-                │
-                ├── Get pg.Client by sessionId
-                ├── Execute query
-                ├── Update session state
-                │
-                ▼
-Client: session:result { sessionId, result, state }
-```
-
-### Commit Broadcast
-
-```
-Client: session:commit { sessionId: "abc" }
-                │
-                ▼
-SessionManagerService.commit(sessionId)
-                │
-                ├── Execute COMMIT
-                ├── Update state: inTransaction = false
-                │
-                ▼
-TerminalGateway: broadcast data:committed to ALL clients
-                │
-                ▼
-All clients: DatabaseState panel updates
-```
+- Applied via `BEGIN ISOLATION LEVEL ...` on next transaction start
 
 ## Error Handling
 
-| Error Type            | Handling                            |
-| --------------------- | ----------------------------------- |
-| Connection failed     | Return error, cleanup session       |
-| Query syntax error    | Return PG error message             |
-| Deadlock detected     | PG aborts transaction, return error |
-| Serialization failure | PG aborts transaction, return error |
-| Lock timeout          | Return error, session remains valid |
+| Error Type            | Handling                             |
+| --------------------- | ------------------------------------ |
+| Connection failed     | Return error, cleanup session        |
+| Query syntax error    | Return PG error message              |
+| Deadlock detected     | PG aborts transaction, auto-rollback |
+| Serialization failure | PG aborts transaction, auto-rollback |
+| Lock timeout          | Return error, session remains valid  |
 
 ## Connection Lifecycle
 
@@ -159,26 +143,26 @@ All clients: DatabaseState panel updates
 Client connects (WebSocket)
          │
          ▼
-Client: session:create { isolationLevel: "READ COMMITTED" }
+Client: session:create { terminalId: 1, isolationLevel: "READ COMMITTED" }
          │
          ▼
-SessionManagerService.create()
+SessionManagerService.createSession(terminalId, isolationLevel)
          │
          ├── new pg.Client()
          ├── client.connect()
-         ├── Store in sessions map
+         ├── Store: { client, state, terminalId }
          │
          ▼
 Client: session:created { sessionId, state }
          │
          ▼
-    ... queries ...
+    ... queries with uncommitted snapshots ...
          │
          ▼
 Client disconnects (WebSocket)
          │
          ▼
-SessionManagerService.destroyAll(clientId)
+SessionManagerService.closeSession(sessionId)
          │
-         └── Close all pg.Client for this WebSocket
+         └── ROLLBACK if in transaction, then close
 ```

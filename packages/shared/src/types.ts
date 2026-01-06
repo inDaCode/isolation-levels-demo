@@ -8,6 +8,11 @@ export type IsolationLevel =
   | 'SERIALIZABLE';
 
 /**
+ * Terminal identifier
+ */
+export type TerminalId = 1 | 2 | 3;
+
+/**
  * Database session state
  */
 export interface SessionState {
@@ -44,11 +49,23 @@ export interface QueryError {
   detail?: string;
 }
 
+/**
+ * Uncommitted data snapshot from a terminal's transaction
+ */
+export interface UncommittedSnapshot {
+  terminalId: TerminalId;
+  tables: {
+    accounts: Record<string, unknown>[];
+    products: Record<string, unknown>[];
+  };
+}
+
 // ─────────────────────────────────────────────
 // WebSocket Events: Client → Server
 // ─────────────────────────────────────────────
 
 export interface CreateSessionPayload {
+  terminalId: TerminalId;
   isolationLevel?: IsolationLevel;
 }
 
@@ -80,6 +97,7 @@ export interface QueryResultEvent {
   result?: QueryResult;
   error?: QueryError;
   state?: SessionState;
+  uncommitted?: UncommittedSnapshot;
 }
 
 export interface SessionStatusEvent {
