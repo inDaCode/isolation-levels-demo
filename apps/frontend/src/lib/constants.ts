@@ -1,4 +1,4 @@
-import type { TerminalId } from '@/stores/session-store';
+import type { TerminalId } from '@isolation-demo/shared';
 
 export const TERMINAL_COLORS: Record<TerminalId, { bg: string; text: string; label: string }> = {
   1: { bg: 'bg-blue-900/30', text: 'text-blue-400', label: 'T1' },

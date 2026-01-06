@@ -62,6 +62,8 @@ export function useCommittedData(): UseCommittedDataReturn {
   const highlightTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
+    let mounted = true;
+
     const scheduleHighlightClear = () => {
       if (highlightTimerRef.current !== null) {
         window.clearTimeout(highlightTimerRef.current);
@@ -85,13 +87,13 @@ export function useCommittedData(): UseCommittedDataReturn {
       }
     };
 
-    socket.on(WS_EVENTS.DATA_COMMITTED, handleDataCommitted);
-
-    // Fetch initial data
+    // Fetch initial data BEFORE subscribing
     Promise.all([
       socket.emitWithAck(WS_EVENTS.DATA_GET_COMMITTED, { table: 'accounts' }),
       socket.emitWithAck(WS_EVENTS.DATA_GET_COMMITTED, { table: 'products' }),
     ]).then((responses) => {
+      if (!mounted) return;
+
       const [accountsRes, productsRes] = responses as CommittedDataEvent[];
       const initial = [
         { table: 'accounts' as TableName, rows: accountsRes.rows },
@@ -102,9 +104,13 @@ export function useCommittedData(): UseCommittedDataReturn {
       } as CommittedData);
       prevDataRef.current = initial;
       setData(initial);
+
+      // Subscribe AFTER initial data loaded
+      socket.on(WS_EVENTS.DATA_COMMITTED, handleDataCommitted);
     });
 
     return () => {
+      mounted = false;
       socket.off(WS_EVENTS.DATA_COMMITTED, handleDataCommitted);
       if (highlightTimerRef.current !== null) {
         window.clearTimeout(highlightTimerRef.current);

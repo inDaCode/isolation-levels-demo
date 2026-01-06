@@ -1,11 +1,11 @@
 import { useState, useCallback } from 'react';
 import { SCENARIOS, type Scenario } from '@/data/scenarios';
-import { useSessionStore, type TerminalId } from '@/stores/session-store';
-import type { IsolationLevel } from '@isolation-demo/shared';
+import { useSessionStore } from '@/stores/session-store';
+import type { IsolationLevel, TerminalId } from '@isolation-demo/shared';
 
 const DEFAULT_ISOLATION_LEVEL: IsolationLevel = 'READ COMMITTED';
-const TERMINAL_IDS: TerminalId[] = [1, 2, 3];
 
+const TERMINAL_IDS: TerminalId[] = [1, 2, 3];
 interface UseScenarioReturn {
   scenario: Scenario | null;
   currentStep: number;
@@ -40,11 +40,13 @@ export function useScenario(): UseScenarioReturn {
   const currentStepData = scenario?.steps[currentStep] ?? null;
 
   const applyIsolationLevels = useCallback(
-    (levels: Scenario['setup']['isolationLevels']) => {
-      TERMINAL_IDS.forEach((terminalId, index) => {
-        const level = levels[index] ?? DEFAULT_ISOLATION_LEVEL;
-        setIsolationLevel(terminalId, level);
-      });
+    async (levels: Scenario['setup']['isolationLevels']) => {
+      await Promise.all(
+        TERMINAL_IDS.map((terminalId, index) => {
+          const level = levels[index] ?? DEFAULT_ISOLATION_LEVEL;
+          return setIsolationLevel(terminalId, level);
+        }),
+      );
     },
     [setIsolationLevel],
   );
@@ -56,12 +58,12 @@ export function useScenario(): UseScenarioReturn {
   }, [setIsolationLevel]);
 
   const start = useCallback(
-    (scenarioId: string) => {
+    async (scenarioId: string) => {
       const found = SCENARIOS.find((s) => s.id === scenarioId);
       if (found) {
         setScenario(found);
         setCurrentStep(0);
-        applyIsolationLevels(found.setup.isolationLevels);
+        await applyIsolationLevels(found.setup.isolationLevels);
       }
     },
     [applyIsolationLevels],

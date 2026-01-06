@@ -1,6 +1,6 @@
 import type { TableChanges } from '@/hooks/use-committed-data';
 import type { UncommittedData } from '@/stores/session-store';
-import { TERMINAL_COLORS } from './constants';
+import { TERMINAL_COLORS } from '@/lib/constants';
 import { computePendingChanges, getRowId } from './pending-changes';
 
 interface TableViewProps {

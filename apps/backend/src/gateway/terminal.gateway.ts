@@ -24,9 +24,8 @@ import {
   type CommittedDataEvent,
 } from '@isolation-demo/shared';
 import { SessionManagerService } from '../database/session-manager.service';
+import { ALLOWED_TABLES } from '../database/session-manager.types';
 import { SETUP_SQL } from '../database/setup.sql';
-
-const DEMO_TABLES = ['accounts', 'products'] as const;
 
 @WebSocketGateway({
   cors: { origin: '*' },
@@ -181,7 +180,7 @@ export class TerminalGateway
 
   private async broadcastCommittedData(): Promise<void> {
     await Promise.all(
-      DEMO_TABLES.map(async (table) => {
+      ALLOWED_TABLES.map(async (table) => {
         const rows = await this.sessionManager.getCommittedData(table);
         this.server.emit(WS_EVENTS.DATA_COMMITTED, { table, rows });
       }),

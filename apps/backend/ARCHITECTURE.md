@@ -43,7 +43,8 @@ Responsibilities:
 
 - Create/destroy PG connections per terminal
 - Execute SQL with transaction handling
-- Return uncommitted snapshots during transactions
+- Track modified rows during transactions
+- Return uncommitted snapshots with modification info
 - Track session state (isolation level, in-transaction)
 
 See [ADR-003](../../docs/adr/003-dedicated-connections-over-pool.md) for why dedicated connections.
@@ -72,6 +73,42 @@ Fully typed — see `@isolation-demo/shared` for `ClientToServerEvents` and `Ser
 | `session:result`  | `{ sessionId, result?, error?, uncommitted?}` | Query result + snapshot |
 | `data:committed`  | `{ table, rows }`                             | Broadcast after commit  |
 
+## Modified Rows Tracking
+
+Each session tracks which rows were modified during the current transaction:
+
+```typescript
+interface ActiveSession {
+  client: Client;
+  state: SessionState;
+  terminalId: TerminalId;
+  modifiedRows: {
+    accounts: Set<string>;
+    products: Set<string>;
+  };
+}
+```
+
+### How It Works
+
+1. Before executing a query, snapshot current table state
+2. Execute the query
+3. After execution, snapshot table state again
+4. Compare snapshots to detect which rows changed (INSERT/UPDATE/DELETE)
+5. Add changed row IDs to `modifiedRows` set
+
+This allows frontend to distinguish between:
+
+- Rows the terminal actually modified (show as pending changes)
+- Rows the terminal sees differently due to isolation level (don't show)
+
+### Lifecycle
+
+- `BEGIN` — clear `modifiedRows` (new transaction starts fresh)
+- `COMMIT` / `ROLLBACK` — clear `modifiedRows`
+- Query execution — accumulate modified rows
+- Error with rollback — clear `modifiedRows`
+
 ## Uncommitted Snapshots
 
 When executing queries in a transaction, the response includes an `uncommitted` snapshot:
@@ -83,10 +120,14 @@ interface UncommittedSnapshot {
     accounts: Record<string, unknown>[];
     products: Record<string, unknown>[];
   };
+  modifiedRows: {
+    accounts: string[]; // Row IDs modified by this transaction
+    products: string[];
+  };
 }
 ```
 
-This allows the frontend to show pending changes before commit.
+This allows the frontend to show only actual pending changes before commit.
 
 ## Session State
 
@@ -110,9 +151,9 @@ type IsolationLevel =
 ### Explicit Transactions
 
 ```
-BEGIN                    → inTransaction: true, return snapshot
-  SELECT/UPDATE/etc      → stays in transaction, return snapshot
-COMMIT/ROLLBACK          → inTransaction: false, clear snapshot
+BEGIN                    → inTransaction: true, clear modifiedRows, return snapshot
+  SELECT/UPDATE/etc      → track modified rows, return snapshot
+COMMIT/ROLLBACK          → inTransaction: false, clear modifiedRows
 ```
 
 ### Autocommit
@@ -129,13 +170,13 @@ SELECT/UPDATE (no BEGIN) → executes immediately, commits
 
 ## Error Handling
 
-| Error Type            | Handling                             |
-| --------------------- | ------------------------------------ |
-| Connection failed     | Return error, cleanup session        |
-| Query syntax error    | Return PG error message              |
-| Deadlock detected     | PG aborts transaction, auto-rollback |
-| Serialization failure | PG aborts transaction, auto-rollback |
-| Lock timeout          | Return error, session remains valid  |
+| Error Type            | Handling                                             |
+| --------------------- | ---------------------------------------------------- |
+| Connection failed     | Return error, cleanup session                        |
+| Query syntax error    | Return PG error message, rollback, clear modified    |
+| Deadlock detected     | PG aborts transaction, auto-rollback, clear modified |
+| Serialization failure | PG aborts transaction, auto-rollback, clear modified |
+| Lock timeout          | Return error, session remains valid                  |
 
 ## Connection Lifecycle
 
@@ -150,13 +191,13 @@ SessionManagerService.createSession(terminalId, isolationLevel)
          │
          ├── new pg.Client()
          ├── client.connect()
-         ├── Store: { client, state, terminalId }
+         ├── Store: { client, state, terminalId, modifiedRows: empty }
          │
          ▼
 Client: session:created { sessionId, state }
          │
          ▼
-    ... queries with uncommitted snapshots ...
+    ... queries with uncommitted snapshots + modifiedRows ...
          │
          ▼
 Client disconnects (WebSocket)

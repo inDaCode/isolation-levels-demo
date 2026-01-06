@@ -1,8 +1,8 @@
 import { Badge } from '@/components/ui/badge';
 import { Loader2 } from 'lucide-react';
 import { IsolationSelect } from './isolation-select';
-import type { IsolationLevel } from '@isolation-demo/shared';
-import type { TerminalId } from '@/stores/session-store';
+import type { IsolationLevel, TerminalId } from '@isolation-demo/shared';
+import { TERMINAL_COLORS } from '@/lib/constants';
 
 interface TerminalHeaderProps {
   terminalId: TerminalId;
@@ -12,12 +12,6 @@ interface TerminalHeaderProps {
   onIsolationChange: (level: IsolationLevel) => void;
   lockIsolation: boolean;
 }
-
-const TERMINAL_COLORS: Record<TerminalId, string> = {
-  1: 'text-blue-400',
-  2: 'text-green-400',
-  3: 'text-orange-400',
-};
 
 export function TerminalHeader({
   terminalId,

@@ -35,14 +35,18 @@ Target: developers learning database concurrency concepts through hands-on exper
 │                                   │                                         │
 │        ┌──────────────────────────┼──────────────────────────┐              │
 │        │                          │                          │              │
-│  ┌─────┴─────┐  ┌─────────┐ ┌─────┴─────┐  ┌─────────┐ ┌─────┴─────┐       │
-│  │ PG Conn A │  │ Utility │ │ PG Conn B │  │ Utility │ │ PG Conn C │       │
-│  │ (T1)      │  │ Client  │ │ (T2)      │  │         │ │ (T3)      │       │
-│  └─────┬─────┘  └────┬────┘ └─────┬─────┘  └─────────┘ └─────┬─────┘       │
-│        │             │            │                          │              │
-└────────┼─────────────┼────────────┼──────────────────────────┼──────────────┘
-         │             │            │                          │
-         └─────────────┴────────────┴──────────────────────────┘
+│  ┌─────┴─────┐              ┌─────┴─────┐              ┌─────┴─────┐       │
+│  │ PG Conn A │              │ PG Conn B │              │ PG Conn C │       │
+│  │ (T1)      │              │ (T2)      │              │ (T3)      │       │
+│  └─────┬─────┘              └─────┬─────┘              └─────┬─────┘       │
+│        │                          │                          │              │
+│        │            ┌─────────────┴─────────────┐            │              │
+│        │            │      Utility Client       │            │              │
+│        │            └─────────────┬─────────────┘            │              │
+│        │                          │                          │              │
+└────────┼──────────────────────────┼──────────────────────────┼──────────────┘
+         │                          │                          │
+         └──────────────────────────┴──────────────────────────┘
                                     │
                           ┌─────────┴─────────┐
                           │   PostgreSQL 16   │
@@ -87,6 +91,7 @@ isolation-levels-demo/
 │           │   └── scenario/       # Guided scenario panel
 │           ├── stores/             # Zustand store
 │           ├── hooks/              # React hooks
+│           ├── lib/                # Socket client, utilities, constants
 │           └── data/               # 15 scenario definitions
 │
 ├── packages/
@@ -109,9 +114,27 @@ isolation-levels-demo/
 Database State panel shows:
 
 - **Committed data** — actual database state
-- **Pending changes** — uncommitted modifications per terminal
+- **Pending changes** — uncommitted modifications per terminal (only rows modified by that terminal)
 - **Color coding** — T1 (blue), T2 (green), T3 (orange)
 - **Change types** — updates (`→`), inserts (new row), deletes (`→ ∅`)
+
+### Modified Rows Tracking
+
+Backend tracks which rows each transaction actually modified (INSERT/UPDATE/DELETE). This prevents showing false "pending changes" when a terminal simply sees old snapshot data but hasn't modified anything.
+
+```typescript
+interface UncommittedSnapshot {
+  terminalId: TerminalId;
+  tables: {
+    accounts: Record<string, unknown>[];
+    products: Record<string, unknown>[];
+  };
+  modifiedRows: {
+    accounts: string[]; // IDs of rows modified by this transaction
+    products: string[];
+  };
+}
+```
 
 ### Typed WebSocket Protocol
 

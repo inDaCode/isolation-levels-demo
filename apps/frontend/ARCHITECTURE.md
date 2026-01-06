@@ -28,8 +28,7 @@ src/
 │   ├── database-state/
 │   │   ├── index.tsx                 # Main container (DatabaseState)
 │   │   ├── table-view.tsx            # Table with committed + pending data
-│   │   ├── pending-changes.ts        # Diff computation logic
-│   │   └── constants.ts              # Terminal colors
+│   │   └── pending-changes.ts        # Diff computation logic
 │   │
 │   ├── explanation/
 │   │   ├── explanation-panel.tsx     # Top info bar
@@ -54,6 +53,7 @@ src/
 │
 ├── lib/
 │   ├── socket-client.ts              # Typed Socket.io instance
+│   ├── constants.ts                  # Terminal colors
 │   └── utils.ts                      # Tailwind cn() helper
 │
 └── App.tsx                           # Layout orchestration
@@ -64,14 +64,14 @@ src/
 Terminal state and uncommitted data managed by Zustand store.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                        Zustand Store                        │
-│  ┌─────────────────────────────────────────────────────┐   │
-│  │ sessions: { 1: TerminalSession, 2: ..., 3: ... }    │   │
-│  │ uncommitted: { 1: tables | null, 2: ..., 3: ... }   │   │
-│  │ actions: execute, commit, rollback, clearUncommitted│   │
-│  └─────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        Zustand Store                            │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │ sessions: { 1: TerminalSession, 2: ..., 3: ... }        │   │
+│  │ uncommitted: { 1: UncommittedSnapshot | null, 2: ..., 3: ... } │
+│  │ actions: execute, commit, rollback, clearUncommitted    │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
 ### Store Structure
@@ -79,7 +79,7 @@ Terminal state and uncommitted data managed by Zustand store.
 ```typescript
 interface SessionStore {
   sessions: Record<TerminalId, TerminalSession>;
-  uncommitted: Record<TerminalId, UncommittedTables | null>;
+  uncommitted: Record<TerminalId, UncommittedSnapshot | null>;
 
   setSql: (terminalId, sql) => void;
   createSession: (terminalId, isolationLevel?) => Promise<void>;
@@ -100,6 +100,18 @@ interface TerminalSession {
   log: LogEntry[];
   isLoading: boolean;
 }
+
+interface UncommittedSnapshot {
+  terminalId: TerminalId;
+  tables: {
+    accounts: Record<string, unknown>[];
+    products: Record<string, unknown>[];
+  };
+  modifiedRows: {
+    accounts: string[];
+    products: string[];
+  };
+}
 ```
 
 ## Uncommitted Data Flow
@@ -108,16 +120,21 @@ interface TerminalSession {
 Terminal executes query in transaction
        │
        ▼
-Backend returns { result, uncommitted: { terminalId, tables } }
+Backend tracks modified rows (before/after snapshot comparison)
        │
        ▼
-Store: uncommitted[terminalId] = tables
+Backend returns { result, uncommitted: { terminalId, tables, modifiedRows } }
+       │
+       ▼
+Store: uncommitted[terminalId] = snapshot
        │
        ▼
 DatabaseState subscribes to uncommitted
        │
        ▼
-computePendingChanges() diffs committed vs uncommitted
+computePendingChanges() filters by modifiedRows:
+  - Only shows changes for rows in modifiedRows
+  - Ignores rows terminal sees but didn't modify
        │
        ▼
 TableView renders:
@@ -126,13 +143,40 @@ TableView renders:
   - Deletes: "1000 → ∅ (T1)" strikethrough
 ```
 
+## Pending Changes Logic
+
+The `computePendingChanges()` function computes what to display:
+
+```typescript
+// For each terminal with uncommitted data:
+for (const terminalId of [1, 2, 3]) {
+  const { tables, modifiedRows } = uncommitted[terminalId];
+
+  // Only process rows that this terminal actually modified
+  for (const row of tables[tableName]) {
+    if (!modifiedRows[tableName].includes(rowId)) {
+      continue; // Skip — terminal sees this but didn't change it
+    }
+
+    // Compare with committed data and record the change
+  }
+}
+```
+
+This prevents false positives when:
+
+- T1 starts transaction, sees `balance = 1000`
+- T2 updates to `balance = 1500`, commits
+- T1 still sees `balance = 1000` (isolation) but didn't modify it
+- Without `modifiedRows` check, UI would incorrectly show T1 will change it back
+
 ## Terminal Colors
 
-Consistent across the app:
+Consistent across the app (defined in `lib/constants.ts`):
 
-- **Terminal 1**: Blue (`text-blue-400`)
-- **Terminal 2**: Green (`text-green-400`)
-- **Terminal 3**: Orange (`text-orange-400`)
+- **Terminal 1**: Blue (`text-blue-400`, `bg-blue-900/30`)
+- **Terminal 2**: Green (`text-green-400`, `bg-green-900/30`)
+- **Terminal 3**: Orange (`text-orange-400`, `bg-orange-900/30`)
 
 ## Scenarios
 
