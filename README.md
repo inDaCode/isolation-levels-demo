@@ -87,7 +87,7 @@ PostgreSQL 16
 pnpm dev           # Start all (backend + frontend)
 pnpm dev:backend   # Backend only (port 3000)
 pnpm dev:frontend  # Frontend only (port 5173)
-pnpm test          # Run all tests (110 tests)
+pnpm test          # Run all tests
 pnpm lint          # ESLint
 pnpm build         # Production build
 ```

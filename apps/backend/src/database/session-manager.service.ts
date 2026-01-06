@@ -8,10 +8,33 @@ import type {
   FieldInfo,
 } from '@isolation-demo/shared';
 
+// ─────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────
+
 interface ActiveSession {
   client: Client;
   state: SessionState;
 }
+
+type TransactionCommand = 'BEGIN' | 'COMMIT' | 'ROLLBACK';
+
+interface OperationResult {
+  success: boolean;
+  error?: QueryError;
+}
+
+interface QueryExecutionResult {
+  result?: QueryResult;
+  error?: QueryError;
+}
+
+// ─────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────
+
+const ALLOWED_TABLES = ['accounts', 'products'] as const;
+type AllowedTable = (typeof ALLOWED_TABLES)[number];
 
 const PG_TYPE_MAP: Record<number, string> = {
   16: 'boolean',
@@ -26,14 +49,15 @@ const PG_TYPE_MAP: Record<number, string> = {
   1700: 'numeric',
 };
 
-/**
- * Manages PostgreSQL sessions for isolation level demonstration.
- * Each session maintains its own dedicated database connection.
- */
+// ─────────────────────────────────────────────
+// Service
+// ─────────────────────────────────────────────
+
 @Injectable()
 export class SessionManagerService implements OnModuleDestroy {
   private readonly logger = new Logger(SessionManagerService.name);
   private readonly sessions = new Map<string, ActiveSession>();
+  private utilityClient: Client | null = null;
 
   private readonly connectionConfig = {
     host: process.env.DB_HOST || 'localhost',
@@ -42,6 +66,10 @@ export class SessionManagerService implements OnModuleDestroy {
     user: process.env.DB_USER || 'demo',
     password: process.env.DB_PASSWORD || 'demo',
   };
+
+  // ─────────────────────────────────────────────
+  // Session Lifecycle
+  // ─────────────────────────────────────────────
 
   async createSession(
     isolationLevel: IsolationLevel = 'READ COMMITTED',
@@ -63,83 +91,94 @@ export class SessionManagerService implements OnModuleDestroy {
     return state;
   }
 
+  async closeSession(sessionId: string): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+
+    try {
+      if (session.state.inTransaction) {
+        await session.client.query('ROLLBACK');
+      }
+      await session.client.end();
+    } catch {
+      // Ignore close errors
+    } finally {
+      this.sessions.delete(sessionId);
+      this.logger.log(`Session closed: ${sessionId}`);
+    }
+  }
+
+  getSessionState(sessionId: string): SessionState | null {
+    return this.sessions.get(sessionId)?.state ?? null;
+  }
+
+  // ─────────────────────────────────────────────
+  // Query Execution
+  // ─────────────────────────────────────────────
+
   async executeQuery(
     sessionId: string,
     sql: string,
-  ): Promise<{ result?: QueryResult; error?: QueryError }> {
+  ): Promise<QueryExecutionResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return { error: { message: 'Session not found' } };
     }
 
-    const { client, state } = session;
     const startTime = performance.now();
+    const command = this.parseTransactionCommand(sql);
+
+    if (command) {
+      return this.executeTransactionCommand(session, command, startTime);
+    }
+
+    return this.executeRegularQuery(session, sql, startTime);
+  }
+
+  private parseTransactionCommand(sql: string): TransactionCommand | null {
+    const normalized = sql.trim().toUpperCase().replace(/;$/, '');
+
+    if (normalized === 'BEGIN' || normalized.startsWith('BEGIN ')) {
+      return 'BEGIN';
+    }
+    if (normalized === 'COMMIT') return 'COMMIT';
+    if (normalized === 'ROLLBACK') return 'ROLLBACK';
+
+    return null;
+  }
+
+  private async executeTransactionCommand(
+    session: ActiveSession,
+    command: TransactionCommand,
+    startTime: number,
+  ): Promise<QueryExecutionResult> {
+    const { client, state } = session;
+
+    if (command === 'BEGIN') {
+      if (state.inTransaction) {
+        return { error: { message: 'Transaction already in progress' } };
+      }
+      await client.query(`BEGIN ISOLATION LEVEL ${state.isolationLevel}`);
+      state.inTransaction = true;
+    } else {
+      if (!state.inTransaction) {
+        return { error: { message: 'No transaction in progress' } };
+      }
+      await client.query(command);
+      state.inTransaction = false;
+    }
+
+    return { result: this.emptyResult(startTime) };
+  }
+
+  private async executeRegularQuery(
+    session: ActiveSession,
+    sql: string,
+    startTime: number,
+  ): Promise<QueryExecutionResult> {
+    const { client, state } = session;
 
     try {
-      const sqlUpper = sql.trim().toUpperCase();
-
-      // Handle BEGIN - start transaction with configured isolation level
-      if (
-        sqlUpper === 'BEGIN' ||
-        sqlUpper === 'BEGIN;' ||
-        sqlUpper.startsWith('BEGIN ')
-      ) {
-        if (state.inTransaction) {
-          return { error: { message: 'Transaction already in progress' } };
-        }
-
-        await client.query(`BEGIN ISOLATION LEVEL ${state.isolationLevel}`);
-        state.inTransaction = true;
-
-        return {
-          result: {
-            rows: [],
-            rowCount: 0,
-            fields: [],
-            duration: Math.round(performance.now() - startTime),
-          },
-        };
-      }
-
-      // Handle COMMIT
-      if (sqlUpper === 'COMMIT' || sqlUpper === 'COMMIT;') {
-        if (!state.inTransaction) {
-          return { error: { message: 'No transaction in progress' } };
-        }
-
-        await client.query('COMMIT');
-        state.inTransaction = false;
-
-        return {
-          result: {
-            rows: [],
-            rowCount: 0,
-            fields: [],
-            duration: Math.round(performance.now() - startTime),
-          },
-        };
-      }
-
-      // Handle ROLLBACK
-      if (sqlUpper === 'ROLLBACK' || sqlUpper === 'ROLLBACK;') {
-        if (!state.inTransaction) {
-          return { error: { message: 'No transaction in progress' } };
-        }
-
-        await client.query('ROLLBACK');
-        state.inTransaction = false;
-
-        return {
-          result: {
-            rows: [],
-            rowCount: 0,
-            fields: [],
-            duration: Math.round(performance.now() - startTime),
-          },
-        };
-      }
-
-      // Regular query - runs in autocommit mode if not in explicit transaction
       const pgResult = await client.query(sql);
       const duration = Math.round(performance.now() - startTime);
 
@@ -157,23 +196,30 @@ export class SessionManagerService implements OnModuleDestroy {
         },
       };
     } catch (err) {
-      // If error occurs during transaction, transaction may be aborted
-      // PostgreSQL requires ROLLBACK before new commands
       if (state.inTransaction) {
-        try {
-          await client.query('ROLLBACK');
-        } catch {
-          // Ignore rollback errors
-        }
+        await this.silentRollback(client);
         state.inTransaction = false;
       }
       return { error: this.parseError(err) };
     }
   }
 
-  async commit(
+  // ─────────────────────────────────────────────
+  // Transaction Controls
+  // ─────────────────────────────────────────────
+
+  async commit(sessionId: string): Promise<OperationResult> {
+    return this.endTransaction(sessionId, 'COMMIT');
+  }
+
+  async rollback(sessionId: string): Promise<OperationResult> {
+    return this.endTransaction(sessionId, 'ROLLBACK');
+  }
+
+  private async endTransaction(
     sessionId: string,
-  ): Promise<{ success: boolean; error?: QueryError }> {
+    command: 'COMMIT' | 'ROLLBACK',
+  ): Promise<OperationResult> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return { success: false, error: { message: 'Session not found' } };
@@ -184,7 +230,7 @@ export class SessionManagerService implements OnModuleDestroy {
     }
 
     try {
-      await session.client.query('COMMIT');
+      await session.client.query(command);
       session.state.inTransaction = false;
       return { success: true };
     } catch (err) {
@@ -192,31 +238,7 @@ export class SessionManagerService implements OnModuleDestroy {
     }
   }
 
-  async rollback(
-    sessionId: string,
-  ): Promise<{ success: boolean; error?: QueryError }> {
-    const session = this.sessions.get(sessionId);
-    if (!session) {
-      return { success: false, error: { message: 'Session not found' } };
-    }
-
-    if (!session.state.inTransaction) {
-      return { success: false, error: { message: 'No active transaction' } };
-    }
-
-    try {
-      await session.client.query('ROLLBACK');
-      session.state.inTransaction = false;
-      return { success: true };
-    } catch (err) {
-      return { success: false, error: this.parseError(err) };
-    }
-  }
-
-  setIsolationLevel(
-    sessionId: string,
-    level: IsolationLevel,
-  ): { success: boolean; error?: QueryError } {
+  setIsolationLevel(sessionId: string, level: IsolationLevel): OperationResult {
     const session = this.sessions.get(sessionId);
     if (!session) {
       return { success: false, error: { message: 'Session not found' } };
@@ -235,60 +257,80 @@ export class SessionManagerService implements OnModuleDestroy {
     return { success: true };
   }
 
-  getSessionState(sessionId: string): SessionState | null {
-    return this.sessions.get(sessionId)?.state ?? null;
-  }
+  // ─────────────────────────────────────────────
+  // Data Operations
+  // ─────────────────────────────────────────────
 
   async getCommittedData(table: string): Promise<Record<string, unknown>[]> {
-    const client = new Client(this.connectionConfig);
+    if (!this.isAllowedTable(table)) {
+      return [];
+    }
+
     try {
-      await client.connect();
+      const client = await this.getUtilityClient();
       const result = await client.query(`SELECT * FROM ${table} ORDER BY id`);
       return result.rows as Record<string, unknown>[];
     } catch {
       return [];
-    } finally {
-      await client.end().catch(() => {});
     }
   }
 
-  async executeSetup(
-    sql: string,
-  ): Promise<{ success: boolean; error?: QueryError }> {
-    const client = new Client(this.connectionConfig);
+  async executeSetup(sql: string): Promise<OperationResult> {
     try {
-      await client.connect();
+      const client = await this.getUtilityClient();
       await client.query(sql);
       return { success: true };
     } catch (err) {
       return { success: false, error: this.parseError(err) };
-    } finally {
-      await client.end().catch(() => {});
     }
   }
 
-  async closeSession(sessionId: string): Promise<void> {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-
-    try {
-      if (session.state.inTransaction) {
-        await session.client.query('ROLLBACK');
-      }
-      await session.client.end();
-    } catch {
-      // Ignore close errors
-    } finally {
-      this.sessions.delete(sessionId);
-      this.logger.log(`Session closed: ${sessionId}`);
-    }
+  private isAllowedTable(table: string): table is AllowedTable {
+    return ALLOWED_TABLES.includes(table as AllowedTable);
   }
+
+  private async getUtilityClient(): Promise<Client> {
+    if (!this.utilityClient) {
+      this.utilityClient = new Client(this.connectionConfig);
+      await this.utilityClient.connect();
+    }
+    return this.utilityClient;
+  }
+
+  // ─────────────────────────────────────────────
+  // Cleanup
+  // ─────────────────────────────────────────────
 
   async onModuleDestroy(): Promise<void> {
-    const closePromises = Array.from(this.sessions.keys()).map((id) =>
+    const closePromises = [...this.sessions.keys()].map((id) =>
       this.closeSession(id),
     );
     await Promise.allSettled(closePromises);
+
+    if (this.utilityClient) {
+      await this.utilityClient.end().catch(() => {});
+    }
+  }
+
+  // ─────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────
+
+  private emptyResult(startTime: number): QueryResult {
+    return {
+      rows: [],
+      rowCount: 0,
+      fields: [],
+      duration: Math.round(performance.now() - startTime),
+    };
+  }
+
+  private async silentRollback(client: Client): Promise<void> {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // Ignore rollback errors
+    }
   }
 
   private parseError(err: unknown): QueryError {

@@ -122,3 +122,45 @@ export const WS_EVENTS = {
   SESSION_STATUS: 'session:status',
   DATA_COMMITTED: 'data:committed',
 } as const;
+
+// ─────────────────────────────────────────────
+// WebSocket Event Maps (for typed Socket.io)
+// ─────────────────────────────────────────────
+
+/**
+ * Client → Server events with callbacks
+ */
+export interface ClientToServerEvents {
+  [WS_EVENTS.SESSION_CREATE]: (
+    payload: CreateSessionPayload,
+    callback: (response: SessionCreatedEvent) => void,
+  ) => void;
+  [WS_EVENTS.SESSION_EXECUTE]: (
+    payload: ExecuteQueryPayload,
+    callback: (response: QueryResultEvent) => void,
+  ) => void;
+  [WS_EVENTS.SESSION_COMMIT]: (
+    payload: SessionActionPayload,
+    callback: (response: SessionOperationResult) => void,
+  ) => void;
+  [WS_EVENTS.SESSION_ROLLBACK]: (
+    payload: SessionActionPayload,
+    callback: (response: SessionOperationResult) => void,
+  ) => void;
+  [WS_EVENTS.SESSION_SET_ISOLATION]: (
+    payload: SetIsolationPayload,
+    callback: (response: SessionOperationResult) => void,
+  ) => void;
+  [WS_EVENTS.DATA_GET_COMMITTED]: (
+    payload: { table: string },
+    callback: (response: CommittedDataEvent) => void,
+  ) => void;
+  [WS_EVENTS.DATABASE_RESET]: (callback: (response: SetupResponse) => void) => void;
+}
+
+/**
+ * Server → Client events (broadcasts)
+ */
+export interface ServerToClientEvents {
+  [WS_EVENTS.DATA_COMMITTED]: (data: CommittedDataEvent) => void;
+}

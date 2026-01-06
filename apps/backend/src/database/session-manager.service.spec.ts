@@ -1,10 +1,13 @@
 import { SessionManagerService } from './session-manager.service';
+import { SETUP_SQL } from './setup.sql';
 
 describe('SessionManagerService', () => {
   let service: SessionManagerService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     service = new SessionManagerService();
+    // Ensure tables exist
+    await service.executeSetup(SETUP_SQL);
   });
 
   afterEach(async () => {
@@ -54,30 +57,23 @@ describe('SessionManagerService', () => {
     beforeEach(async () => {
       const state = await service.createSession();
       sessionId = state.sessionId;
-
-      await service.executeSetup(`
-        DROP TABLE IF EXISTS test_table;
-        CREATE TABLE test_table (id SERIAL PRIMARY KEY, value TEXT);
-        INSERT INTO test_table (value) VALUES ('row1'), ('row2');
-      `);
     });
 
     describe('SELECT', () => {
       it('returns rows array', async () => {
         const { result } = await service.executeQuery(
           sessionId,
-          'SELECT * FROM test_table ORDER BY id',
+          'SELECT * FROM accounts ORDER BY id',
         );
 
-        expect(result?.rows).toHaveLength(2);
-        expect(result?.rows[0]).toMatchObject({ value: 'row1' });
-        expect(result?.rows[1]).toMatchObject({ value: 'row2' });
+        expect(result?.rows).toHaveLength(3);
+        expect(result?.rows[0]).toMatchObject({ name: 'Alice' });
       });
 
       it('returns field metadata with names and types', async () => {
         const { result } = await service.executeQuery(
           sessionId,
-          'SELECT id, value FROM test_table LIMIT 1',
+          'SELECT id, name, balance FROM accounts LIMIT 1',
         );
 
         expect(result?.fields).toContainEqual({
@@ -85,24 +81,28 @@ describe('SessionManagerService', () => {
           dataType: 'integer',
         });
         expect(result?.fields).toContainEqual({
-          name: 'value',
-          dataType: 'text',
+          name: 'name',
+          dataType: 'varchar',
+        });
+        expect(result?.fields).toContainEqual({
+          name: 'balance',
+          dataType: 'integer',
         });
       });
 
       it('returns rowCount', async () => {
         const { result } = await service.executeQuery(
           sessionId,
-          'SELECT * FROM test_table',
+          'SELECT * FROM accounts',
         );
 
-        expect(result?.rowCount).toBe(2);
+        expect(result?.rowCount).toBe(3);
       });
 
       it('returns duration in milliseconds', async () => {
         const { result } = await service.executeQuery(
           sessionId,
-          'SELECT * FROM test_table',
+          'SELECT * FROM accounts',
         );
 
         expect(typeof result?.duration).toBe('number');
@@ -190,15 +190,15 @@ describe('SessionManagerService', () => {
         await service.executeQuery(sessionId, 'BEGIN');
         await service.executeQuery(
           sessionId,
-          "INSERT INTO test_table (value) VALUES ('new')",
+          "INSERT INTO accounts (name, balance) VALUES ('temp', 0)",
         );
         await service.executeQuery(sessionId, 'ROLLBACK');
 
         const { result } = await service.executeQuery(
           sessionId,
-          'SELECT * FROM test_table',
+          'SELECT * FROM accounts',
         );
-        expect(result?.rows).toHaveLength(2);
+        expect(result?.rows).toHaveLength(3);
       });
     });
 
@@ -206,7 +206,7 @@ describe('SessionManagerService', () => {
       it('returns QueryError for syntax errors', async () => {
         const { error } = await service.executeQuery(
           sessionId,
-          'SELEC * FROM test_table',
+          'SELEC * FROM accounts',
         );
 
         expect(error).toBeDefined();
@@ -375,35 +375,29 @@ describe('SessionManagerService', () => {
   });
 
   describe('getCommittedData', () => {
-    beforeEach(async () => {
-      await service.executeSetup(`
-        DROP TABLE IF EXISTS committed_test;
-        CREATE TABLE committed_test (id SERIAL PRIMARY KEY, name TEXT);
-        INSERT INTO committed_test (name) VALUES ('Alice'), ('Bob');
-      `);
+    it('returns rows for allowed table', async () => {
+      const rows = await service.getCommittedData('accounts');
+
+      expect(rows).toHaveLength(3);
+      expect(rows[0]).toMatchObject({ name: 'Alice', balance: 1000 });
     });
 
-    it('returns rows from specified table', async () => {
-      const rows = await service.getCommittedData('committed_test');
-
-      expect(rows).toHaveLength(2);
-      expect(rows[0]).toMatchObject({ name: 'Alice' });
-      expect(rows[1]).toMatchObject({ name: 'Bob' });
-    });
-
-    it('returns empty array for non-existent table', async () => {
-      const rows = await service.getCommittedData('nonexistent_table');
+    it('returns empty array for non-allowed table', async () => {
+      const rows = await service.getCommittedData('some_other_table');
 
       expect(rows).toEqual([]);
+    });
+
+    it('returns rows ordered by id', async () => {
+      const rows = await service.getCommittedData('accounts');
+
+      expect(rows[0].id).toBeLessThan(rows[1].id as number);
     });
   });
 
   describe('executeSetup', () => {
     it('executes SQL successfully', async () => {
-      const result = await service.executeSetup(`
-        DROP TABLE IF EXISTS setup_test;
-        CREATE TABLE setup_test (id INT);
-      `);
+      const result = await service.executeSetup(`SELECT 1`);
 
       expect(result.success).toBe(true);
     });
@@ -425,22 +419,16 @@ describe('SessionManagerService', () => {
     });
 
     it('rolls back active transaction before closing', async () => {
-      await service.executeSetup(`
-        DROP TABLE IF EXISTS close_test;
-        CREATE TABLE close_test (id SERIAL PRIMARY KEY, value TEXT);
-        INSERT INTO close_test (value) VALUES ('original');
-      `);
-
       const { sessionId } = await service.createSession();
       await service.executeQuery(sessionId, 'BEGIN');
       await service.executeQuery(
         sessionId,
-        "UPDATE close_test SET value = 'modified' WHERE id = 1",
+        'UPDATE accounts SET balance = 999 WHERE id = 1',
       );
       await service.closeSession(sessionId);
 
-      const rows = await service.getCommittedData('close_test');
-      expect(rows[0]).toMatchObject({ value: 'original' });
+      const rows = await service.getCommittedData('accounts');
+      expect(rows[0]).toMatchObject({ balance: 1000 });
     });
 
     it('handles already closed session gracefully', async () => {
@@ -466,14 +454,6 @@ describe('SessionManagerService', () => {
   });
 
   describe('isolation level behavior', () => {
-    beforeEach(async () => {
-      await service.executeSetup(`
-        DROP TABLE IF EXISTS isolation_test;
-        CREATE TABLE isolation_test (id SERIAL PRIMARY KEY, counter INT);
-        INSERT INTO isolation_test (counter) VALUES (100);
-      `);
-    });
-
     it('READ COMMITTED sees committed changes from other transactions', async () => {
       const s1 = await service.createSession('READ COMMITTED');
       const s2 = await service.createSession('READ COMMITTED');
@@ -481,21 +461,21 @@ describe('SessionManagerService', () => {
       await service.executeQuery(s1.sessionId, 'BEGIN');
       const { result: before } = await service.executeQuery(
         s1.sessionId,
-        'SELECT counter FROM isolation_test WHERE id = 1',
+        'SELECT balance FROM accounts WHERE id = 1',
       );
 
       await service.executeQuery(
         s2.sessionId,
-        'UPDATE isolation_test SET counter = 200 WHERE id = 1',
+        'UPDATE accounts SET balance = 200 WHERE id = 1',
       );
 
       const { result: after } = await service.executeQuery(
         s1.sessionId,
-        'SELECT counter FROM isolation_test WHERE id = 1',
+        'SELECT balance FROM accounts WHERE id = 1',
       );
 
-      expect(before?.rows[0]).toMatchObject({ counter: 100 });
-      expect(after?.rows[0]).toMatchObject({ counter: 200 });
+      expect(before?.rows[0]).toMatchObject({ balance: 1000 });
+      expect(after?.rows[0]).toMatchObject({ balance: 200 });
     });
 
     it('REPEATABLE READ does not see committed changes from other transactions', async () => {
@@ -505,21 +485,21 @@ describe('SessionManagerService', () => {
       await service.executeQuery(s1.sessionId, 'BEGIN');
       const { result: before } = await service.executeQuery(
         s1.sessionId,
-        'SELECT counter FROM isolation_test WHERE id = 1',
+        'SELECT balance FROM accounts WHERE id = 1',
       );
 
       await service.executeQuery(
         s2.sessionId,
-        'UPDATE isolation_test SET counter = 200 WHERE id = 1',
+        'UPDATE accounts SET balance = 200 WHERE id = 1',
       );
 
       const { result: after } = await service.executeQuery(
         s1.sessionId,
-        'SELECT counter FROM isolation_test WHERE id = 1',
+        'SELECT balance FROM accounts WHERE id = 1',
       );
 
-      expect(before?.rows[0]).toMatchObject({ counter: 100 });
-      expect(after?.rows[0]).toMatchObject({ counter: 100 });
+      expect(before?.rows[0]).toMatchObject({ balance: 1000 });
+      expect(after?.rows[0]).toMatchObject({ balance: 1000 });
     });
   });
 });

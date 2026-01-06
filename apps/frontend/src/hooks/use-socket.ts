@@ -1,15 +1,9 @@
 import { useEffect, useState } from 'react';
 import { socket } from '@/lib/socket-client';
-import type { Socket } from 'socket.io-client';
 
 export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected';
 
-interface UseSocketReturn {
-  socket: Socket;
-  status: ConnectionStatus;
-}
-
-export function useSocket(): UseSocketReturn {
+export function useSocket() {
   const [status, setStatus] = useState<ConnectionStatus>(() =>
     socket.connected ? 'connected' : 'disconnected',
   );

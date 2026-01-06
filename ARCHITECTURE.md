@@ -89,9 +89,9 @@ isolation-levels-demo/
 ├── packages/
 │   └── shared/                     # @isolation-demo/shared
 │       └── src/
+│           ├── index.ts
 │           ├── types.ts            # WebSocket event types
-│           └── setup-sql.ts        # Database schema
-│
+│           └── scenarios.ts        # Scenario type definitions
 ├── docs/
 │   └── adr/                        # Architecture Decision Records
 │

@@ -9,8 +9,11 @@ NestJS WebSocket server managing PostgreSQL sessions. Each connected client can 
 ```
 src/
 ├── database/
-│   └── session-manager.service.ts  # PG connection lifecycle
+│   ├── database.module.ts          # Database module
+│   ├── session-manager.service.ts  # PG connection lifecycle
+│   └── setup.sql.ts                # Database setup SQL
 ├── gateway/
+│   ├── gateway.module.ts           # Gateway module
 │   └── terminal.gateway.ts         # WebSocket event handlers
 ├── app.module.ts
 └── main.ts
