@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { useSessionStore, type TerminalId } from './session-store';
-import { WS_EVENTS, type SessionState, type QueryResult } from '@isolation-demo/shared';
+import { useSessionStore } from './session-store';
+import {
+  WS_EVENTS,
+  type SessionState,
+  type QueryResult,
+  type TerminalId,
+  type UncommittedSnapshot,
+} from '@isolation-demo/shared';
 
 // ─────────────────────────────────────────────
 // Mocks
@@ -36,6 +42,18 @@ function createQueryResult(overrides: Partial<QueryResult> = {}): QueryResult {
     rowCount: 0,
     fields: [],
     duration: 5,
+    ...overrides,
+  };
+}
+
+function createUncommittedSnapshot(
+  terminalId: TerminalId,
+  overrides: Partial<Omit<UncommittedSnapshot, 'terminalId'>> = {},
+): UncommittedSnapshot {
+  return {
+    terminalId,
+    tables: { accounts: [], products: [] },
+    modifiedRows: { accounts: [], products: [] },
     ...overrides,
   };
 }
@@ -227,10 +245,10 @@ describe('useSessionStore', () => {
     });
 
     it('stores uncommitted snapshot when in transaction', async () => {
-      const uncommitted = {
-        terminalId: 1 as const,
+      const uncommitted = createUncommittedSnapshot(1, {
         tables: { accounts: [{ id: 1 }], products: [] },
-      };
+        modifiedRows: { accounts: ['1'], products: [] },
+      });
       mockEmit.mockResolvedValueOnce({
         sessionId: 'test-session-id',
         result: createQueryResult(),
@@ -240,12 +258,16 @@ describe('useSessionStore', () => {
 
       await useSessionStore.getState().execute(1);
 
-      expect(getUncommitted(1)).toEqual(uncommitted.tables);
+      expect(getUncommitted(1)).toEqual(uncommitted);
     });
 
     it('clears uncommitted when transaction ends', async () => {
       useSessionStore.setState({
-        uncommitted: { 1: { accounts: [], products: [] }, 2: null, 3: null },
+        uncommitted: {
+          1: createUncommittedSnapshot(1),
+          2: null,
+          3: null,
+        },
       });
       mockEmit.mockResolvedValueOnce({
         sessionId: 'test-session-id',
@@ -283,7 +305,11 @@ describe('useSessionStore', () => {
 
     it('commits and clears uncommitted', async () => {
       useSessionStore.setState({
-        uncommitted: { 1: { accounts: [], products: [] }, 2: null, 3: null },
+        uncommitted: {
+          1: createUncommittedSnapshot(1),
+          2: null,
+          3: null,
+        },
       });
       mockEmit.mockResolvedValueOnce({
         sessionId: 'test-session-id',
@@ -320,7 +346,11 @@ describe('useSessionStore', () => {
 
     it('rollbacks and clears uncommitted', async () => {
       useSessionStore.setState({
-        uncommitted: { 1: { accounts: [], products: [] }, 2: null, 3: null },
+        uncommitted: {
+          1: createUncommittedSnapshot(1),
+          2: null,
+          3: null,
+        },
       });
       mockEmit.mockResolvedValueOnce({
         sessionId: 'test-session-id',
@@ -376,8 +406,12 @@ describe('useSessionStore', () => {
     it('clears uncommitted for specified terminal only', () => {
       useSessionStore.setState({
         uncommitted: {
-          1: { accounts: [{ id: 1 }], products: [] },
-          2: { accounts: [{ id: 2 }], products: [] },
+          1: createUncommittedSnapshot(1, {
+            tables: { accounts: [{ id: 1 }], products: [] },
+          }),
+          2: createUncommittedSnapshot(2, {
+            tables: { accounts: [{ id: 2 }], products: [] },
+          }),
           3: null,
         },
       });

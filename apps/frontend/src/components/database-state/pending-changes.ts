@@ -1,4 +1,5 @@
-import type { TerminalId, UncommittedData } from '@/stores/session-store';
+import type { TerminalId } from '@isolation-demo/shared';
+import type { UncommittedData } from '@/stores/session-store';
 
 export interface PendingChange {
   terminalId: TerminalId;
@@ -38,29 +39,32 @@ export function computePendingChanges(
     const terminalData = uncommitted[terminalId];
     if (!terminalData) continue;
 
-    const uncommittedRows = terminalData[tableName];
+    const uncommittedRows = terminalData.tables[tableName];
+    const modifiedRowIds = new Set(terminalData.modifiedRows[tableName]);
     const uncommittedIds = new Set(uncommittedRows.map(getRowId));
 
-    // Find deletes: in committed but not in uncommitted
+    // Find deletes: row was modified by this terminal and not in uncommitted
     for (const rowId of committedIds) {
-      if (!uncommittedIds.has(rowId)) {
+      if (modifiedRowIds.has(rowId) && !uncommittedIds.has(rowId)) {
         const existing = pendingDeletes.get(rowId) ?? [];
         existing.push(terminalId);
         pendingDeletes.set(rowId, existing);
       }
     }
 
-    // Find inserts: in uncommitted but not in committed
+    // Find inserts: row was modified by this terminal and not in committed
     for (const row of uncommittedRows) {
       const rowId = getRowId(row);
-      if (!committedIds.has(rowId)) {
+      if (modifiedRowIds.has(rowId) && !committedIds.has(rowId)) {
         pendingInserts.push({ terminalId, row });
       }
     }
 
-    // Find updates: same id but different values
+    // Find updates: row was modified by this terminal and values differ
     for (const row of uncommittedRows) {
       const rowId = getRowId(row);
+      if (!modifiedRowIds.has(rowId)) continue;
+
       const committed = committedMap.get(rowId);
       if (!committed) continue;
 

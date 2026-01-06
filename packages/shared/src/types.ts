@@ -10,6 +10,7 @@ export type IsolationLevel =
 /**
  * Terminal identifier
  */
+
 export type TerminalId = 1 | 2 | 3;
 
 /**
@@ -57,6 +58,10 @@ export interface UncommittedSnapshot {
   tables: {
     accounts: Record<string, unknown>[];
     products: Record<string, unknown>[];
+  };
+  modifiedRows: {
+    accounts: string[];
+    products: string[];
   };
 }
 

@@ -54,7 +54,12 @@ export class SessionManagerService implements OnModuleDestroy {
       createdAt: new Date(),
     };
 
-    this.sessions.set(sessionId, { client, state, terminalId });
+    this.sessions.set(sessionId, {
+      client,
+      state,
+      terminalId,
+      modifiedRows: { accounts: new Set(), products: new Set() },
+    });
     return state;
   }
 
@@ -137,12 +142,16 @@ export class SessionManagerService implements OnModuleDestroy {
       }
       await client.query(`BEGIN ISOLATION LEVEL ${state.isolationLevel}`);
       state.inTransaction = true;
+      // Clear modified rows on new transaction
+      session.modifiedRows = { accounts: new Set(), products: new Set() };
     } else {
       if (!state.inTransaction) {
         return { error: { message: 'No transaction in progress' } };
       }
       await client.query(command);
       state.inTransaction = false;
+      // Clear modified rows on commit/rollback
+      session.modifiedRows = { accounts: new Set(), products: new Set() };
     }
 
     return { result: this.emptyResult(startTime) };
@@ -156,7 +165,19 @@ export class SessionManagerService implements OnModuleDestroy {
     const { client, state } = session;
 
     try {
+      // Snapshot before query (only if in transaction)
+      const snapshotBefore = state.inTransaction
+        ? await this.getRawSnapshot(client)
+        : null;
+
       const pgResult = await client.query(sql);
+
+      // Snapshot after query (only if in transaction)
+      if (state.inTransaction && snapshotBefore) {
+        const snapshotAfter = await this.getRawSnapshot(client);
+        this.trackModifiedRows(session, snapshotBefore, snapshotAfter);
+      }
+
       const duration = Math.round(performance.now() - startTime);
 
       const fields: FieldInfo[] = (pgResult.fields ?? []).map((f) => ({
@@ -181,15 +202,73 @@ export class SessionManagerService implements OnModuleDestroy {
       if (state.inTransaction) {
         await this.silentRollback(client);
         state.inTransaction = false;
+        session.modifiedRows = { accounts: new Set(), products: new Set() };
       }
       return { error: this.parseError(err) };
+    }
+  }
+
+  private async getRawSnapshot(
+    client: Client,
+  ): Promise<{
+    accounts: Record<string, unknown>[];
+    products: Record<string, unknown>[];
+  }> {
+    const [accountsResult, productsResult] = await Promise.all([
+      client.query('SELECT * FROM accounts ORDER BY id'),
+      client.query('SELECT * FROM products ORDER BY id'),
+    ]);
+
+    return {
+      accounts: accountsResult.rows as Record<string, unknown>[],
+      products: productsResult.rows as Record<string, unknown>[],
+    };
+  }
+
+  private trackModifiedRows(
+    session: ActiveSession,
+    before: {
+      accounts: Record<string, unknown>[];
+      products: Record<string, unknown>[];
+    },
+    after: {
+      accounts: Record<string, unknown>[];
+      products: Record<string, unknown>[];
+    },
+  ): void {
+    for (const table of ALLOWED_TABLES) {
+      const beforeMap = new Map(
+        before[table].map((row) => [String(row.id), row]),
+      );
+      const afterMap = new Map(
+        after[table].map((row) => [String(row.id), row]),
+      );
+
+      // Check for modified or deleted rows
+      for (const [id, beforeRow] of beforeMap) {
+        const afterRow = afterMap.get(id);
+        if (!afterRow) {
+          // Row deleted
+          session.modifiedRows[table].add(id);
+        } else if (JSON.stringify(beforeRow) !== JSON.stringify(afterRow)) {
+          // Row modified
+          session.modifiedRows[table].add(id);
+        }
+      }
+
+      // Check for inserted rows
+      for (const id of afterMap.keys()) {
+        if (!beforeMap.has(id)) {
+          session.modifiedRows[table].add(id);
+        }
+      }
     }
   }
 
   private async getSessionSnapshot(
     session: ActiveSession,
   ): Promise<UncommittedSnapshot> {
-    const { client, terminalId } = session;
+    const { client, terminalId, modifiedRows } = session;
 
     const [accountsResult, productsResult] = await Promise.all([
       client.query('SELECT * FROM accounts ORDER BY id'),
@@ -201,6 +280,10 @@ export class SessionManagerService implements OnModuleDestroy {
       tables: {
         accounts: accountsResult.rows as Record<string, unknown>[],
         products: productsResult.rows as Record<string, unknown>[],
+      },
+      modifiedRows: {
+        accounts: Array.from(modifiedRows.accounts),
+        products: Array.from(modifiedRows.products),
       },
     };
   }
@@ -233,6 +316,7 @@ export class SessionManagerService implements OnModuleDestroy {
     try {
       await session.client.query(command);
       session.state.inTransaction = false;
+      session.modifiedRows = { accounts: new Set(), products: new Set() };
       return { success: true };
     } catch (err) {
       return { success: false, error: this.parseError(err) };

@@ -11,6 +11,10 @@ export interface ActiveSession {
   client: Client;
   state: SessionState;
   terminalId: TerminalId;
+  modifiedRows: {
+    accounts: Set<string>;
+    products: Set<string>;
+  };
 }
 
 export type TransactionCommand = 'BEGIN' | 'COMMIT' | 'ROLLBACK';

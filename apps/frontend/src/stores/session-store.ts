@@ -10,6 +10,7 @@ import {
   type QueryResultEvent,
   type SessionOperationResult,
   type UncommittedSnapshot,
+  type TerminalId,
 } from '@isolation-demo/shared';
 
 // --- Types ---
@@ -31,9 +32,7 @@ export interface TerminalSession {
   isLoading: boolean;
 }
 
-export type TerminalId = 1 | 2 | 3;
-
-export type UncommittedData = Record<TerminalId, UncommittedSnapshot['tables'] | null>;
+export type UncommittedData = Record<TerminalId, UncommittedSnapshot | null>;
 
 interface SessionStore {
   sessions: Record<TerminalId, TerminalSession>;
@@ -112,10 +111,7 @@ export const useSessionStore = create<SessionStore>((set, get) => {
     }));
   };
 
-  const updateUncommitted = (
-    terminalId: TerminalId,
-    data: UncommittedSnapshot['tables'] | null,
-  ) => {
+  const updateUncommitted = (terminalId: TerminalId, data: UncommittedSnapshot | null) => {
     set((state) => ({
       uncommitted: {
         ...state.uncommitted,
@@ -185,9 +181,9 @@ export const useSessionStore = create<SessionStore>((set, get) => {
           sql,
         });
 
-        // Update uncommitted data
+        // Update uncommitted data (store entire snapshot)
         if (response.uncommitted) {
-          updateUncommitted(response.uncommitted.terminalId, response.uncommitted.tables);
+          updateUncommitted(response.uncommitted.terminalId, response.uncommitted);
         } else if (!response.state?.inTransaction) {
           // Clear uncommitted when transaction ends
           updateUncommitted(terminalId, null);
